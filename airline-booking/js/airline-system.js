@@ -262,7 +262,7 @@ class AirlineSystem {
    * @param {string} contact       - 联系方式
    * @returns {object}
    */
-  bookTicket(flightNo, name, ticketCount, cabinClass, passengerType, contact, customSeats) {
+  bookTicket(flightNo, name, ticketCount, cabinClass, passengerType, contact, customSeats, seatCabins) {
     const f = this.findFlight(flightNo);
     if (!f) return { success: false, message: `航班 ${flightNo} 不存在` };
     if (ticketCount <= 0) return { success: false, message: '订票数量必须 > 0' };
@@ -290,16 +290,32 @@ class AirlineSystem {
       f.remaining -= ticketCount;
 
       const typeMultiplier = { adult: 1.0, child: 0.75, infant: 0.1 }[passengerType] || 1.0;
-      const totalPrice = Math.round(f.getPrice(cabinClass) * ticketCount * typeMultiplier);
+      // 跨舱位选座: 按每座实际舱位计价
+      let totalPrice, cabinDetail;
+      if (seatCabins && customSeats) {
+        totalPrice = Math.round(customSeats.reduce((sum, s) => sum + f.getPrice(seatCabins[s] || cabinClass), 0) * typeMultiplier);
+        const tally = {};
+        for (const c of Object.values(seatCabins)) tally[c] = (tally[c] || 0) + 1;
+        const parts = [];
+        if (tally[1]) parts.push(`头等×${tally[1]}`);
+        if (tally[2]) parts.push(`商务×${tally[2]}`);
+        if (tally[3]) parts.push(`经济×${tally[3]}`);
+        cabinDetail = parts.join('+');
+      } else {
+        totalPrice = Math.round(f.getPrice(cabinClass) * ticketCount * typeMultiplier);
+        cabinDetail = null;
+      }
       this._persist();
 
       return {
         success: true,
         message: `订票成功! ${name}`,
+        name,
         pnr,
         seatNumbers: seats,
         cabinClass,
         cabinName: cabinName(cabinClass),
+        cabinDetail,
         ticketCount,
         totalPrice,
         passengerType,
@@ -385,7 +401,8 @@ class AirlineSystem {
           bookingTime: node.bookingTime,
           passengerType: node.passengerType,
           contact: node.contact,
-          price: f.getPrice(node.cabinClass) * node.ticketCount,
+          price: Math.round(f.getPrice(node.cabinClass) * node.ticketCount
+            * ({ adult: 1.0, child: 0.75, infant: 0.1 }[node.passengerType] || 1.0)),
         };
       }
     }

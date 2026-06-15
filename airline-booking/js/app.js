@@ -20,19 +20,6 @@ let selectedFlight = null;         // 当前选中航班对象
 let selectedSeats = [];            // 用户手动选中的座位号
 let seatCabinMap = {};             // seatId → cabinClass 快速查表
 
-// ======================== 座位选择辅助 ========================
-
-function clearSeatSelection() {
-  document.querySelectorAll('#seat-map-container .seat-click.selected').forEach(s => s.classList.remove('selected'));
-  selectedSeats = [];
-}
-
-function deselectOldestSeat() {
-  const old = selectedSeats.shift();
-  const oldEl = document.querySelector(`#seat-map-container .seat-click[data-seat="${old}"]`);
-  if (oldEl) oldEl.classList.remove('selected');
-}
-
 // ======================== 初始化 ========================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -82,28 +69,22 @@ function bindEvents() {
   // 重置
   $('#btn-reset').addEventListener('click', resetAll);
 
-  // 舱位切换 → 清空旧舱位选择 + 刷新价格
-  $('#book-cabin').addEventListener('change', () => {
-    if (selectedSeats.length > 0) {
-      const newCabin = parseInt($('#book-cabin').value);
-      const oldCabin = seatCabinMap[selectedSeats[0]];
-      if (oldCabin && oldCabin !== newCabin) {
-        clearSeatSelection();
-        toast('舱位已变更，请重新选择座位', 'info');
-      }
-    }
-    updatePriceDisplay();
-    syncFormIndicators();
-  });
-  // 订票数量变化 → 超出则移除多余选择 + 刷新价格
-  $('#book-count').addEventListener('input', () => {
-    const max = parseInt($('#book-count').value) || 1;
-    while (selectedSeats.length > max) deselectOldestSeat();
-    updatePriceDisplay();
-    syncFormIndicators();
-  });
+  // 舱位切换 → 仅刷新价格 (座位选择优先, 不清空)
+  const cabinSelect = $('#book-cabin');
+  if (cabinSelect) cabinSelect.addEventListener('change', () => renderPassengerForms());
+  // 订票数量变化 → 仅刷新价格 (右驱左, 不裁剪座位)
+  const countInput = $('#book-count');
+  if (countInput) countInput.addEventListener('input', () => renderPassengerForms());
   // 旅客类型变化 → 刷新价格
-  $('#book-passenger-type').addEventListener('change', updatePriceDisplay);
+  const paxTypeSelect = $('#book-passenger-type');
+  if (paxTypeSelect) paxTypeSelect.addEventListener('change', updatePriceDisplay);
+  // 多乘客表单类型变化 (事件委托)
+  const multiList = document.getElementById('multi-pax-list');
+  if (multiList) {
+    multiList.addEventListener('change', e => {
+      if (e.target.classList.contains('pax-type')) updatePriceDisplay();
+    });
+  }
   // 回车快捷搜索
   document.querySelectorAll('.hero-search input').forEach(el =>
     el.addEventListener('keydown', e => { if (e.key === 'Enter') doQuickSearch(); }));
@@ -404,6 +385,11 @@ function resetBooking() {
   if (summary) summary.remove();
   const hint = document.getElementById('cabin-selection-hint');
   if (hint) hint.remove();
+  // 重置多乘客表单为单选模式
+  const singleForm = document.getElementById('single-pax-form');
+  const multiForm  = document.getElementById('multi-pax-form');
+  if (singleForm) singleForm.classList.remove('hidden');
+  if (multiForm) multiForm.classList.add('hidden');
 }
 
 /** 步骤1→2: 选中航班, 展示预览和座位图 */
@@ -433,8 +419,7 @@ function onSelectFlight() {
 
   // 解锁步骤2
   $('#book-step2-card').classList.remove('step-disabled');
-  updatePriceDisplay();
-  syncFormIndicators();
+  renderPassengerForms();
   $('#book-name').focus();
 }
 
@@ -510,49 +495,82 @@ function renderSeatMap(f) {
     seatCabinMap[el.dataset.seat] = parseInt(el.dataset.cabin);
   });
 
-  // 绑定座位点击事件 — 多选 + 舱位/数量联动
+  // 绑定座位点击事件 — 右驱左: 直接多选, 跨舱位, 数量自动跟随
   document.querySelectorAll('#seat-map-container .seat-click').forEach(el => {
     el.addEventListener('click', function () {
       const seatId = this.dataset.seat;
-      const seatCabin = parseInt(this.dataset.cabin);
-      const maxCount = parseInt($('#book-count').value) || 1;
 
       if (this.classList.contains('selected')) {
-        // ---- 取消选中 ----
+        // 取消选中
         this.classList.remove('selected');
         selectedSeats = selectedSeats.filter(s => s !== seatId);
-        // 同步订票数量
-        if (selectedSeats.length > 0) {
-          $('#book-count').value = selectedSeats.length;
-        }
       } else {
-        // ---- 选中 ----
-        // 首个座位：自动锁定舱位等级
-        if (selectedSeats.length === 0) {
-          $('#book-cabin').value = seatCabin;
-        }
-
-        // 跨舱位处理：若点击不同舱位的座位，切换舱位并清空旧选择
-        const formCabin = parseInt($('#book-cabin').value);
-        if (seatCabin !== formCabin) {
-          clearSeatSelection();
-          $('#book-cabin').value = seatCabin;
-        }
-
-        // 超过票数上限：移除最早选中的座位
-        if (selectedSeats.length >= maxCount) deselectOldestSeat();
-
+        // 选中 — 无上限, 不限舱位
         this.classList.add('selected');
         selectedSeats.push(seatId);
-
-        // 自动更新订票数量 = 已选座位数
-        $('#book-count').value = selectedSeats.length;
       }
 
-      updatePriceDisplay();
-      syncFormIndicators();
+      // 订票数量自动跟随已选座位数
+      const cntInput = $('#book-count');
+      if (cntInput) cntInput.value = selectedSeats.length || 1;
+      renderPassengerForms();
     });
   });
+}
+
+/** 根据已选座位动态渲染旅客表单 (单选/多选模式切换) */
+function renderPassengerForms() {
+  const singleForm = document.getElementById('single-pax-form');
+  const multiForm  = document.getElementById('multi-pax-form');
+  const multiList  = document.getElementById('multi-pax-list');
+  const cabinSum   = document.getElementById('multi-pax-cabin-summary');
+  if (!singleForm || !multiForm) return;
+
+  if (selectedSeats.length === 0) {
+    // 单选模式
+    singleForm.classList.remove('hidden');
+    multiForm.classList.add('hidden');
+    const cnt = $('#book-count');
+    if (cnt) cnt.value = 1;
+    updatePriceDisplay();
+    syncFormIndicators();
+    return;
+  }
+
+  // 多选模式: 逐座填写旅客信息
+  singleForm.classList.add('hidden');
+  multiForm.classList.remove('hidden');
+
+  // 舱位汇总
+  const tally = {};
+  for (const s of selectedSeats) { const c = seatCabinMap[s] || 3; tally[c] = (tally[c] || 0) + 1; }
+  const parts = [];
+  if (tally[1]) parts.push(`头等舱 ×${tally[1]}`);
+  if (tally[2]) parts.push(`商务舱 ×${tally[2]}`);
+  if (tally[3]) parts.push(`经济舱 ×${tally[3]}`);
+  cabinSum.innerHTML = `📋 已选 <strong>${selectedSeats.length}</strong> 座: ${parts.join(' + ')} — 请为每位旅客填写信息`;
+
+  // 逐座输入行
+  multiList.innerHTML = selectedSeats.map(seatId => {
+    const cabin = seatCabinMap[seatId] || 3;
+    const cn = {1:'头等舱',2:'商务舱',3:'经济舱'}[cabin];
+    const css = {1:'cabin-first',2:'cabin-business',3:'cabin-economy'}[cabin];
+    const price = selectedFlight ? selectedFlight.getPrice(cabin).toLocaleString() : '—';
+    return `
+      <div class="passenger-row">
+        <span class="pax-seat-badge ${css}">${seatId}</span>
+        <span class="pax-cabin-tag">${cn} ¥${price}</span>
+        <input type="text" class="pax-name" placeholder="旅客姓名" data-seat="${seatId}" required>
+        <select class="pax-type" data-seat="${seatId}">
+          <option value="adult">成人</option>
+          <option value="child">儿童 (75%)</option>
+          <option value="infant">婴儿 (10%)</option>
+        </select>
+      </div>`;
+  }).join('');
+
+  updatePriceDisplay();
+  syncFormIndicators();
 }
 
 function updatePriceDisplay() {
@@ -566,34 +584,47 @@ function updatePriceDisplay() {
       if (cabinSelect.options[i - 1]) cabinSelect.options[i - 1].textContent = `${labels[i]} — ¥${selectedFlight.prices[i].toLocaleString()}`;
   }
 
-  // 旅客类型折扣乘数
-  const paxType = $('#book-passenger-type').value;
-  const typeMultiplier = { adult: 1.0, child: 0.75, infant: 0.1 }[paxType] || 1.0;
-
-  // 按实际已选座位计算总价 (每座按其所属舱位计价)
+  // 旅客类型折扣乘数 — 多选模式逐座计算, 单选模式统一
   let total = 0;
   const cabinCounts = { 1: 0, 2: 0, 3: 0 };
-  for (const s of selectedSeats) {
-    const c = seatCabinMap[s] || parseInt($('#book-cabin').value) || 3;
-    total += selectedFlight.getPrice(c);
-    cabinCounts[c] = (cabinCounts[c] || 0) + 1;
-  }
 
-  // 若未手动选座，按表单舱位 × 数量估算
-  const formCabin = parseInt($('#book-cabin').value) || 3;
-  const formCount = parseInt($('#book-count').value) || 1;
-  if (selectedSeats.length === 0) {
-    total = selectedFlight.getPrice(formCabin) * formCount;
+  if (selectedSeats.length > 0) {
+    // 多选模式: 每座按其旅客类型独立计价
+    const rows = document.querySelectorAll('#multi-pax-list .passenger-row');
+    if (rows.length > 0) {
+      rows.forEach(row => {
+        const nameInput = row.querySelector('.pax-name');
+        const typeSelect = row.querySelector('.pax-type');
+        const seatId = nameInput ? nameInput.dataset.seat : null;
+        const paxType = typeSelect ? typeSelect.value : 'adult';
+        const mult = { adult: 1.0, child: 0.75, infant: 0.1 }[paxType] || 1.0;
+        const cabin = seatId ? (seatCabinMap[seatId] || 3) : 3;
+        total += Math.round(selectedFlight.getPrice(cabin) * mult);
+        cabinCounts[cabin] = (cabinCounts[cabin] || 0) + 1;
+      });
+    } else {
+      // 行尚未渲染时的后备
+      for (const s of selectedSeats) {
+        const c = seatCabinMap[s] || 3;
+        total += selectedFlight.getPrice(c);
+        cabinCounts[c] = (cabinCounts[c] || 0) + 1;
+      }
+    }
+  } else {
+    // 单选模式: 统一舱位 × 数量 × 类型
+    const paxType = ($('#book-passenger-type') && $('#book-passenger-type').value) || 'adult';
+    const mult = { adult: 1.0, child: 0.75, infant: 0.1 }[paxType] || 1.0;
+    const formCabin = parseInt(($('#book-cabin') && $('#book-cabin').value) || 3);
+    const formCount = parseInt(($('#book-count') && $('#book-count').value) || 1);
+    total = Math.round(selectedFlight.getPrice(formCabin) * formCount * mult);
   }
-  total = Math.round(total * typeMultiplier);
 
   // 构建舱位明细
   const parts = [];
   if (cabinCounts[1] > 0) parts.push(`头等×${cabinCounts[1]}`);
   if (cabinCounts[2] > 0) parts.push(`商务×${cabinCounts[2]}`);
   if (cabinCounts[3] > 0) parts.push(`经济×${cabinCounts[3]}`);
-  const cabinDetail = parts.length > 0 ? parts.join('+') : cabinName(formCabin);
-  const paxLabel = { adult: '成人价', child: '儿童75%', infant: '婴儿10%' }[paxType] || '';
+  const cabinDetail = parts.length > 0 ? parts.join('+') : cabinName(parseInt(($('#book-cabin') && $('#book-cabin').value) || 3));
 
   // 在座位图上方显示价格摘要
   let summary = document.getElementById('seat-price-summary');
@@ -606,8 +637,7 @@ function updatePriceDisplay() {
   }
   summary.innerHTML = `💺 已选 <strong>${selectedSeats.length}</strong> 座 &nbsp;|&nbsp;
     ${cabinDetail} &nbsp;|&nbsp;
-    <strong>合计 ¥${total.toLocaleString()}</strong>
-    ${paxType !== 'adult' ? `&nbsp;|&nbsp;<em>${paxLabel}</em>` : ''}`;
+    <strong>合计 ¥${total.toLocaleString()}</strong>`;
 }
 
 /** 将已选座位同步回左侧表单指示器 (不改变用户手动输入的值) */
@@ -624,44 +654,87 @@ function syncFormIndicators() {
     if (legend) legend.parentNode.insertBefore(hint, legend.nextSibling);
   }
   if (selectedSeats.length > 0) {
-    const c = seatCabinMap[selectedSeats[0]] || 3;
-    hint.innerHTML = `已锁定舱位为 <strong>${cabinName(c)}</strong> (点击其他舱位座位可切换)`;
+    const tally = {};
+    for (const s of selectedSeats) { const c = seatCabinMap[s] || 3; tally[c] = (tally[c] || 0) + 1; }
+    const parts = [];
+    if (tally[1]) parts.push(`头等×${tally[1]}`);
+    if (tally[2]) parts.push(`商务×${tally[2]}`);
+    if (tally[3]) parts.push(`经济×${tally[3]}`);
+    hint.innerHTML = `已选 <strong>${selectedSeats.length}</strong> 座: ${parts.join(' + ')}`;
     hint.classList.add('locked');
   } else {
-    hint.innerHTML = '点击座位自动锁定舱位，或手动选择下方舱位等级';
+    hint.innerHTML = '点击座位直接选择，支持跨舱位多选';
     hint.classList.remove('locked');
   }
 }
 
-/** 步骤2→3: 确认订票 */
+/** 步骤2→3: 确认订票 (支持多乘客逐座预订) */
 function doBook() {
   if (!selectedFlight) { toast('请先选择航班', 'warning'); return; }
-  const name = $('#book-name').value.trim();
-  const cabin = parseInt($('#book-cabin').value);
-  const paxType = $('#book-passenger-type').value;
-  const contact = $('#book-contact').value.trim();
+  const contact = ($('#book-contact') && $('#book-contact').value || '').trim();
 
-  // 若有手动选座，以选中座位数为准；否则取表单数量
-  const count = selectedSeats.length > 0 ? selectedSeats.length : (parseInt($('#book-count').value) || 1);
+  // ====== 多选模式: 逐座逐旅客订票 ======
+  if (selectedSeats.length > 0) {
+    const rows = document.querySelectorAll('#multi-pax-list .passenger-row');
+    const passengers = [];
+
+    for (const row of rows) {
+      const nameInput = row.querySelector('.pax-name');
+      const typeSelect = row.querySelector('.pax-type');
+      const name = (nameInput && nameInput.value || '').trim();
+      const paxType = typeSelect ? typeSelect.value : 'adult';
+      const seatId = nameInput ? nameInput.dataset.seat : '';
+
+      if (!name) {
+        toast(`请为座位 ${seatId} 填写旅客姓名`, 'warning');
+        if (nameInput) nameInput.focus();
+        return;
+      }
+      // 同批次内禁止同名
+      if (passengers.some(p => p.name === name)) {
+        toast(`旅客 "${name}" 重复，请使用不同的姓名`, 'warning');
+        if (nameInput) nameInput.focus();
+        return;
+      }
+      passengers.push({ name, paxType, seatId, cabin: seatCabinMap[seatId] || 3 });
+    }
+
+    // 逐人预订 (每人1座1票)
+    const results = [];
+    for (const p of passengers) {
+      const res = sys.bookTicket(
+        selectedFlight.flightNo, p.name, 1, p.cabin, p.paxType, contact,
+        [p.seatId], { [p.seatId]: p.cabin }
+      );
+      if (!res.success) {
+        toast(res.message, 'error');
+        // 部分成功时显示已完成的结果
+        if (results.length > 0) showMultiBookingResult(results);
+        return;
+      }
+      results.push(res);
+    }
+
+    showMultiBookingResult(results);
+    toast(`预订成功! ${results.length} 位旅客`, 'success');
+    resetBooking();
+    refreshAll();
+    return;
+  }
+
+  // ====== 单选模式: 传统单旅客订票 ======
+  const name = ($('#book-name') && $('#book-name').value || '').trim();
+  const cabin = parseInt(($('#book-cabin') && $('#book-cabin').value) || 3);
+  const paxType = ($('#book-passenger-type') && $('#book-passenger-type').value) || 'adult';
+  const count = parseInt(($('#book-count') && $('#book-count').value) || 1);
 
   if (!name) { toast('请输入旅客姓名', 'warning'); return; }
   if (!count || count <= 0) { toast('请输入有效的订票数量', 'warning'); return; }
 
-  // 若手动选座，校验舱位一致性
-  let bookCabin = cabin;
-  if (selectedSeats.length > 0) {
-    const seatCabins = new Set(selectedSeats.map(s => seatCabinMap[s]).filter(Boolean));
-    if (seatCabins.size > 1)
-      return toast('所选座位跨不同舱位等级，请统一舱位后重试', 'warning');
-    bookCabin = seatCabins.values().next().value || cabin;
-  }
-
-  const customSeats = selectedSeats.length > 0 ? [...selectedSeats] : null;
-  const res = sys.bookTicket(selectedFlight.flightNo, name, count, bookCabin, paxType, contact, customSeats);
+  const res = sys.bookTicket(selectedFlight.flightNo, name, count, cabin, paxType, contact);
 
   const resultDiv = $('#book-result');
   if (res.success) {
-    // 显示PNR确认卡
     resultDiv.className = 'result-box success show';
     resultDiv.innerHTML = `
       <div style="font-size:16px;font-weight:700;margin-bottom:12px;">✅ 预订成功!</div>
@@ -674,10 +747,10 @@ function doBook() {
           <div class="detail-item"><div class="dl">航线</div><div class="dv">${esc(res.origin)} → ${esc(res.destination)}</div></div>
           <div class="detail-item"><div class="dl">日期</div><div class="dv">${res.nearestDate} (${res.weekday})</div></div>
           <div class="detail-item"><div class="dl">时刻</div><div class="dv">${res.departureTime}</div></div>
-          <div class="detail-item"><div class="dl">舱位</div><div class="dv">${res.cabinName}</div></div>
+          <div class="detail-item"><div class="dl">舱位</div><div class="dv">${res.cabinDetail || res.cabinName}</div></div>
           <div class="detail-item"><div class="dl">座位号</div><div class="dv">${res.seatNumbers.join(', ')}</div></div>
           <div class="detail-item"><div class="dl">票数</div><div class="dv">${res.ticketCount} 张</div></div>
-          <div class="detail-item"><div class="dl">总价</div><div class="dv" class="price-large">¥${res.totalPrice.toLocaleString()}</div></div>
+          <div class="detail-item"><div class="dl">总价</div><div class="dv price-large">¥${res.totalPrice.toLocaleString()}</div></div>
           <div class="detail-item"><div class="dl">订票时间</div><div class="dv">${res.bookingTime}</div></div>
         </div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-light);">📌 请妥善保存 PNR 参考号，用于值机、退票或改签</p>
@@ -716,6 +789,38 @@ function doBook() {
   }
 }
 
+/** 多旅客预订结果展示 */
+function showMultiBookingResult(results) {
+  const resultDiv = $('#book-result');
+  const totalPrice = results.reduce((sum, r) => sum + r.totalPrice, 0);
+  resultDiv.className = 'result-box success show';
+  resultDiv.innerHTML = `
+    <div style="font-size:16px;font-weight:700;margin-bottom:16px;">✅ 预订成功! 共 ${results.length} 位旅客</div>
+    ${results.map(r => `
+    <div class="pnr-card" style="margin-bottom:10px;text-align:left;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div class="pnr-label" style="margin-bottom:2px;">PNR 参考号</div>
+          <div class="pnr-code" style="font-size:20px;">${r.pnr}</div>
+        </div>
+        <div style="text-align:right;">
+          <span class="badge badge-gold">${r.cabinDetail || r.cabinName}</span>
+          <span class="badge" style="background:#e8f0fe;color:#1a56db;">${passengerTypeName(r.passengerType)}</span>
+        </div>
+      </div>
+      <div style="font-size:13px;color:var(--text-mid);margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;">
+        <span>🧑 ${esc(r.name || '—')}</span>
+        <span>💺 ${r.seatNumbers.join(', ')}</span>
+        <span>🕐 ${r.bookingTime}</span>
+        <span style="font-weight:700;color:var(--text);">¥${r.totalPrice.toLocaleString()}</span>
+      </div>
+    </div>`).join('')}
+    <div style="text-align:center;font-weight:700;font-size:16px;padding:8px;color:var(--primary);">
+      合计: ¥${totalPrice.toLocaleString()}
+    </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--text-light);text-align:center;">📌 请妥善保存每位旅客的 PNR 参考号，用于值机、退票或改签</p>`;
+}
+
 // ======================== PNR 管理 ========================
 
 let currentPNR = null;
@@ -746,6 +851,7 @@ function doPNRLookup() {
         <div class="detail-item"><div class="dl">航线</div><div class="dv">${esc(info.origin)} → ${esc(info.destination)}</div></div>
         <div class="detail-item"><div class="dl">日期</div><div class="dv">${info.weekday} ${info.departureTime}</div></div>
         <div class="detail-item"><div class="dl">舱位</div><div class="dv">${info.cabinName}</div></div>
+        <div class="detail-item"><div class="dl">旅客类型</div><div class="dv">${passengerTypeName(info.passengerType)}${info.passengerType !== 'adult' ? ' <em style="font-size:11px;color:var(--text-light);">(折扣价)</em>' : ''}</div></div>
         <div class="detail-item"><div class="dl">座位</div><div class="dv">${(info.seatNumbers||[]).join(', ')}</div></div>
         <div class="detail-item"><div class="dl">票数</div><div class="dv">${info.ticketCount} 张</div></div>
         <div class="detail-item"><div class="dl">票价</div><div class="dv">¥${info.price.toLocaleString()}</div></div>

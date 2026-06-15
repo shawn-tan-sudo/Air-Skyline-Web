@@ -123,32 +123,43 @@
       <div class="card-header"><span class="icon">2️⃣</span>旅客信息 &amp; 选座</div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px;">
         <div>
-          <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-            <div class="form-group">
-              <label>旅客姓名</label>
-              <input type="text" id="book-name" placeholder="请输入姓名">
+          <div id="passenger-area">
+            <!-- 单选模式: 未选座时显示 -->
+            <div id="single-pax-form">
+              <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+                <div class="form-group">
+                  <label>旅客姓名</label>
+                  <input type="text" id="book-name" placeholder="请输入姓名">
+                </div>
+                <div class="form-group">
+                  <label>旅客类型</label>
+                  <select id="book-passenger-type">
+                    <option value="adult">成人 (12+)</option>
+                    <option value="child">儿童 (2-11)</option>
+                    <option value="infant">婴儿 (&lt;2)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>订票数量</label>
+                  <input type="number" id="book-count" min="1" value="1">
+                </div>
+                <div class="form-group">
+                  <label>舱位等级</label>
+                  <select id="book-cabin">
+                    <option value="1">头等舱</option>
+                    <option value="2">商务舱</option>
+                    <option value="3" selected>经济舱</option>
+                  </select>
+                </div>
+              </div>
             </div>
-            <div class="form-group">
-              <label>旅客类型</label>
-              <select id="book-passenger-type">
-                <option value="adult">成人 (12+)</option>
-                <option value="child">儿童 (2-11)</option>
-                <option value="infant">婴儿 (&lt;2)</option>
-              </select>
+            <!-- 多选模式: 选座后切换为逐座填写 -->
+            <div id="multi-pax-form" class="hidden">
+              <div id="multi-pax-cabin-summary" class="cabin-summary"></div>
+              <div id="multi-pax-list"></div>
             </div>
-            <div class="form-group">
-              <label>订票数量</label>
-              <input type="number" id="book-count" min="1" value="1">
-            </div>
-            <div class="form-group">
-              <label>舱位等级</label>
-              <select id="book-cabin">
-                <option value="1">头等舱</option>
-                <option value="2">商务舱</option>
-                <option value="3" selected>经济舱</option>
-              </select>
-            </div>
-            <div class="form-group" style="grid-column:1/-1;">
+            <!-- 共享联系方式 -->
+            <div class="form-group" style="margin-top:12px;">
               <label>联系方式 (手机号)</label>
               <input type="text" id="book-contact" placeholder="选填">
             </div>
