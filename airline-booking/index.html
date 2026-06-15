@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkyLine 航空客运订票系统</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ==================== 头部 ==================== -->
+<header class="app-header">
+  <div class="brand">
+    <span class="logo">✈</span>
+    <div>
+      <h1>Air SkyLine</h1>
+      <div class="tagline">Premium Booking Experience</div>
+    </div>
+  </div>
+  <div class="header-stats">
+    <div class="header-stat"><div class="val" id="hdr-flights">0</div><div class="lbl">航线</div></div>
+    <div class="header-stat"><div class="val" id="hdr-remaining">0</div><div class="lbl">可订座位</div></div>
+    <div class="header-stat"><div class="val" id="hdr-wait">0</div><div class="lbl">候补旅客</div></div>
+  </div>
+</header>
+
+<!-- ==================== 标签导航 ==================== -->
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="tab-overview">📊 航班总览</button>
+  <button class="tab-btn" data-tab="tab-search">🔍 搜索航班</button>
+  <button class="tab-btn" data-tab="tab-book">🎫 预订客票</button>
+  <button class="tab-btn" data-tab="tab-manage">📋 订单管理</button>
+  <button class="tab-btn" data-tab="tab-add">➕ 录入航班</button>
+</nav>
+
+<!-- ==================== 主内容区 ==================== -->
+<main class="main-content">
+
+  <!-- ===== ① 航班总览 ===== -->
+  <section class="tab-content active" id="tab-overview">
+    <!-- Hero 快捷搜索 -->
+    <div class="hero-search">
+      <h2>发现您的下一段旅程</h2>
+      <p class="hero-sub">快速搜索航班 — 输入始发站与终点站查看可用航线</p>
+      <div class="search-row">
+        <div class="search-field">
+          <label>出发城市</label>
+          <input type="text" id="quick-origin" placeholder="例如: 北京" list="airport-list">
+        </div>
+        <div class="search-field">
+          <label>到达城市</label>
+          <input type="text" id="quick-dest" placeholder="例如: 上海" list="airport-list">
+        </div>
+        <div class="search-field">
+          <label>出发日期 (可选)</label>
+          <input type="date" id="quick-date">
+        </div>
+        <button class="btn-search" id="btn-quick-search">🔍 搜索航班</button>
+      </div>
+      <datalist id="airport-list"></datalist>
+      <div class="result-box" id="quick-result" style="margin-top:16px;"></div>
+    </div>
+
+    <!-- 全部航班表 -->
+    <div class="card">
+      <div class="card-header"><span class="icon">📊</span>全部航线汇总表 <span style="font-size:12px;color:var(--text-light);font-weight:400;margin-left:8px;">顺序存储 · 按航班号有序</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>航班号</th><th>航线</th><th>机型</th><th>飞行日</th>
+              <th>时刻</th><th>运力</th><th>余票</th><th>状态</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="overview-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <button class="btn btn-outline btn-sm" id="btn-reset">🔄 恢复测试数据</button>
+  </section>
+
+  <!-- ===== ② 搜索航班 ===== -->
+  <section class="tab-content" id="tab-search">
+    <div class="hero-search">
+      <h2>搜索可用航班</h2>
+      <p class="hero-sub">选择航线与日期，查看所有可用航班及票价</p>
+      <div class="search-row">
+        <div class="search-field">
+          <label>出发城市</label>
+          <select id="search-origin"><option value="">全部始发站</option></select>
+        </div>
+        <div class="search-field">
+          <label>到达城市</label>
+          <select id="search-dest"><option value="">全部终点站</option></select>
+        </div>
+        <div class="search-field">
+          <label>出发日期 (可选)</label>
+          <input type="date" id="search-date">
+        </div>
+        <button class="btn-search" id="btn-search">🔍 搜索</button>
+      </div>
+    </div>
+    <div class="result-box" id="search-result"></div>
+  </section>
+
+  <!-- ===== ③ 预订客票 ===== -->
+  <section class="tab-content" id="tab-book">
+    <!-- 步骤 1: 选航班 -->
+    <div class="card" id="book-step1-card">
+      <div class="card-header"><span class="icon">1️⃣</span>选择航班</div>
+      <div class="form-inline">
+        <div class="form-group">
+          <label>航班号</label>
+          <select id="book-flight" style="min-width:280px;"></select>
+        </div>
+        <button class="btn btn-primary" id="btn-select-flight">确认选择 →</button>
+      </div>
+      <div id="flight-preview" style="margin-top:16px;"></div>
+    </div>
+
+    <!-- 步骤 2: 填信息 + 选座 -->
+    <div class="card step-disabled" id="book-step2-card">
+      <div class="card-header"><span class="icon">2️⃣</span>旅客信息 &amp; 选座</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px;">
+        <div>
+          <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+            <div class="form-group">
+              <label>旅客姓名</label>
+              <input type="text" id="book-name" placeholder="请输入姓名">
+            </div>
+            <div class="form-group">
+              <label>旅客类型</label>
+              <select id="book-passenger-type">
+                <option value="adult">成人 (12+)</option>
+                <option value="child">儿童 (2-11)</option>
+                <option value="infant">婴儿 (&lt;2)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>订票数量</label>
+              <input type="number" id="book-count" min="1" value="1">
+            </div>
+            <div class="form-group">
+              <label>舱位等级</label>
+              <select id="book-cabin">
+                <option value="1">头等舱</option>
+                <option value="2">商务舱</option>
+                <option value="3" selected>经济舱</option>
+              </select>
+            </div>
+            <div class="form-group" style="grid-column:1/-1;">
+              <label>联系方式 (手机号)</label>
+              <input type="text" id="book-contact" placeholder="选填">
+            </div>
+          </div>
+          <button class="btn btn-gold btn-lg" id="btn-book" style="margin-top:16px;">🎫 确认预订</button>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--text-mid);display:block;margin-bottom:6px;">💺 座位预览 — 按舱位颜色区分</label>
+          <div class="seat-map" id="seat-map-container">
+            <p class="empty-state" style="padding:20px;">请先选择航班查看座位图</p>
+          </div>
+          <div class="seat-legend">
+            <span><span class="swatch sw-first"></span>头等舱</span>
+            <span><span class="swatch sw-business"></span>商务舱</span>
+            <span><span class="swatch sw-economy"></span>经济舱</span>
+            <span><span class="swatch sw-occupied"></span>已占用</span>
+            <span><span class="swatch sw-exit"></span>紧急出口</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 步骤 3: 确认结果 -->
+    <div class="result-box" id="book-result"></div>
+  </section>
+
+  <!-- ===== ④ 订单管理 (退票/查询) ===== -->
+  <section class="tab-content" id="tab-manage">
+    <!-- 按PNR查询/退票 -->
+    <div class="card">
+      <div class="card-header"><span class="icon">🔎</span>按订票参考号 (PNR) 查找</div>
+      <div class="form-inline">
+        <div class="form-group">
+          <label>PNR 参考号</label>
+          <input type="text" id="pnr-lookup" placeholder="如: AB3KX9" style="font-family:monospace;font-size:18px;letter-spacing:4px;width:180px;text-transform:uppercase;">
+        </div>
+        <button class="btn btn-primary" id="btn-pnr-search">🔍 查询订单</button>
+        <button class="btn btn-danger" id="btn-pnr-refund" style="display:none;">💵 办理退票</button>
+      </div>
+      <div class="result-box" id="pnr-result"></div>
+    </div>
+
+    <!-- 按姓名退票 -->
+    <div class="card">
+      <div class="card-header"><span class="icon">💵</span>按航班+姓名退票</div>
+      <div class="form-inline">
+        <div class="form-group">
+          <label>航班号</label>
+          <select id="refund-flight" style="min-width:200px;"></select>
+        </div>
+        <div class="form-group">
+          <label>客户姓名</label>
+          <select id="refund-name" style="min-width:150px;"></select>
+        </div>
+        <button class="btn btn-danger" id="btn-refund">💵 确认退票</button>
+      </div>
+      <div class="result-box" id="refund-result"></div>
+    </div>
+
+    <!-- 候补查询 -->
+    <div class="card">
+      <div class="card-header"><span class="icon">⏳</span>候补队列查询</div>
+      <div class="form-inline">
+        <div class="form-group">
+          <label>航班号</label>
+          <select id="waitlist-flight" style="min-width:200px;"></select>
+        </div>
+        <button class="btn btn-outline" id="btn-waitlist-view">查看候补队列</button>
+      </div>
+      <div class="result-box" id="waitlist-result"></div>
+    </div>
+  </section>
+
+  <!-- ===== ⑤ 录入航班 ===== -->
+  <section class="tab-content" id="tab-add">
+    <div class="card">
+      <div class="card-header"><span class="icon">➕</span>录入新航班</div>
+      <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));">
+        <div class="form-group"><label>航班号 *</label><input type="text" id="add-flightno" placeholder="CA1001"></div>
+        <div class="form-group"><label>始发站 *</label><input type="text" id="add-origin" placeholder="北京"></div>
+        <div class="form-group"><label>始发站代码</label><input type="text" id="add-origin-code" placeholder="PEK" maxlength="3" style="text-transform:uppercase;"></div>
+        <div class="form-group"><label>终点站 *</label><input type="text" id="add-dest" placeholder="上海"></div>
+        <div class="form-group"><label>终点站代码</label><input type="text" id="add-dest-code" placeholder="SHA" maxlength="3" style="text-transform:uppercase;"></div>
+        <div class="form-group"><label>飞机号/机型</label><input type="text" id="add-planeno" placeholder="B787-9"></div>
+        <div class="form-group"><label>飞行周日</label><select id="add-weekday"><option>周一</option><option>周二</option><option>周三</option><option>周四</option><option>周五</option><option>周六</option><option>周日</option></select></div>
+        <div class="form-group"><label>起飞时刻</label><input type="time" id="add-deptime" value="08:00"></div>
+        <div class="form-group"><label>到达时刻</label><input type="time" id="add-arrtime" value="10:30"></div>
+        <div class="form-group"><label>乘员定额</label><input type="number" id="add-capacity" min="1" value="200"></div>
+        <div class="form-group"><label>头等舱票价 ¥</label><input type="number" id="add-price1" value="4500" step="100"></div>
+        <div class="form-group"><label>商务舱票价 ¥</label><input type="number" id="add-price2" value="2200" step="100"></div>
+        <div class="form-group"><label>经济舱票价 ¥</label><input type="number" id="add-price3" value="700" step="100"></div>
+        <div class="form-group" style="justify-content:flex-end;">
+          <button class="btn btn-success btn-lg" id="btn-add-flight" style="align-self:flex-end;">➕ 录入航班</button>
+        </div>
+      </div>
+      <div class="result-box" id="add-result"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ==================== Toast ==================== -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ==================== 脚本 ==================== -->
+<script src="js/data-structures.js"></script>
+<script src="js/airline-system.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
