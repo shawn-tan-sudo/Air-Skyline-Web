@@ -111,7 +111,7 @@ function populateFlightSelects() {
   const sel = $('#book-flight');
   if (!sel) return;
   sel.innerHTML = sys.flights.map(f =>
-    `<option value="${esc(f.flightNo)}">${esc(f.flightNo)} — ${esc(f.origin)}→${esc(f.destination)} (${esc(f.weekday)}) 余${f.remaining}</option>`
+    `<option value="${esc(f.flightNo)}">${esc(f.flightNo)} — ${esc(f.origin)}→${esc(f.destination)} (${esc(f.flightDate)}) 余${f.remaining}</option>`
   ).join('');
 }
 
@@ -165,7 +165,7 @@ function refreshOverview() {
       <tr class="clickable" data-idx="${i}">
         <td><strong>${esc(f.flightNo)}</strong></td>
         <td>${esc(f.origin)} → ${esc(f.destination)}</td>
-        <td>${esc(f.planeNo)}</td><td>${esc(f.weekday)}</td>
+        <td>${esc(f.planeNo)}</td><td>${esc(f.flightDate)}</td>
         <td>${f.departureTime}–${f.arrivalTime}</td>
         <td>${f.capacity}</td>
         <td><strong>${f.remaining}</strong></td>
@@ -282,7 +282,7 @@ function renderSearchTableRows(results) {
     <tr>
       <td><strong>${esc(r.flightNo)}</strong></td>
       <td>${esc(r.origin)} → ${esc(r.destination)}</td>
-      <td>${r.nearestDate} (${esc(r.weekday)})</td>
+      <td>${r.flightDate}</td>
       <td>${r.departureTime}–${r.arrivalTime}</td>
       <td>${esc(r.planeNo)}</td>
       <td class="price-highlight"><span class="currency">¥</span>${r.prices[1]}</td>
@@ -402,12 +402,11 @@ function onSelectFlight() {
   seatCabinMap = {};
 
   // 航班预览
-  const nd = sys._nearestDate(f.weekday);
   $('#flight-preview').innerHTML = `
     <div class="flight-preview-card">
       <div><strong>${esc(f.flightNo)}</strong></div>
       <div>${esc(f.origin)} (${f.originCode}) → ${esc(f.destination)} (${f.destCode})</div>
-      <div>📅 ${nd} (${esc(f.weekday)})</div>
+      <div>📅 ${esc(f.flightDate)}</div>
       <div>🕐 ${f.departureTime} – ${f.arrivalTime}</div>
       <div>✈ ${esc(f.planeNo)}</div>
       <div>💺 余 <strong>${f.remaining}</strong> / ${f.capacity}</div>
@@ -745,7 +744,7 @@ function doBook() {
           <div class="detail-item"><div class="dl">旅客</div><div class="dv">${esc(name)}</div></div>
           <div class="detail-item"><div class="dl">航班</div><div class="dv">${res.flightNo}</div></div>
           <div class="detail-item"><div class="dl">航线</div><div class="dv">${esc(res.origin)} → ${esc(res.destination)}</div></div>
-          <div class="detail-item"><div class="dl">日期</div><div class="dv">${res.nearestDate} (${res.weekday})</div></div>
+          <div class="detail-item"><div class="dl">日期</div><div class="dv">${res.flightDate}</div></div>
           <div class="detail-item"><div class="dl">时刻</div><div class="dv">${res.departureTime}</div></div>
           <div class="detail-item"><div class="dl">舱位</div><div class="dv">${res.cabinDetail || res.cabinName}</div></div>
           <div class="detail-item"><div class="dl">座位号</div><div class="dv">${res.seatNumbers.join(', ')}</div></div>
@@ -849,7 +848,7 @@ function doPNRLookup() {
         <div class="detail-item"><div class="dl">旅客</div><div class="dv">${esc(info.name)}</div></div>
         <div class="detail-item"><div class="dl">航班</div><div class="dv">${info.flightNo}</div></div>
         <div class="detail-item"><div class="dl">航线</div><div class="dv">${esc(info.origin)} → ${esc(info.destination)}</div></div>
-        <div class="detail-item"><div class="dl">日期</div><div class="dv">${info.weekday} ${info.departureTime}</div></div>
+        <div class="detail-item"><div class="dl">日期</div><div class="dv">${info.flightDate} ${info.departureTime}</div></div>
         <div class="detail-item"><div class="dl">舱位</div><div class="dv">${info.cabinName}</div></div>
         <div class="detail-item"><div class="dl">旅客类型</div><div class="dv">${passengerTypeName(info.passengerType)}${info.passengerType !== 'adult' ? ' <em style="font-size:11px;color:var(--text-light);">(折扣价)</em>' : ''}</div></div>
         <div class="detail-item"><div class="dl">座位</div><div class="dv">${(info.seatNumbers||[]).join(', ')}</div></div>
@@ -952,7 +951,7 @@ function doAddFlight() {
   const destCode = $('#add-dest-code').value.trim().toUpperCase();
   const flightNo = $('#add-flightno').value.trim();
   const planeNo = $('#add-planeno').value.trim();
-  const weekday = $('#add-weekday').value;
+  const flightDate = $('#add-flightdate').value;
   const depTime = $('#add-deptime').value;
   const arrTime = $('#add-arrtime').value;
   const capacity = parseInt($('#add-capacity').value);
@@ -970,7 +969,7 @@ function doAddFlight() {
 
   sys.addFlight(origin, originCode || origin.slice(0,3).toUpperCase(),
                 dest, destCode || dest.slice(0,3).toUpperCase(),
-                flightNo, planeNo, weekday, depTime, arrTime, capacity, prices);
+                flightNo, planeNo, flightDate, depTime, arrTime, capacity, prices);
 
   // 清空表单
   ['#add-origin','#add-dest','#add-flightno','#add-planeno','#add-origin-code','#add-dest-code']

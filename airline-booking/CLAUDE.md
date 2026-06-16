@@ -1,6 +1,6 @@
 # SkyLine 航空客运订票系统 — 项目文档
 
-> **最后更新**: 2026-06-14 | **版本**: v2.1 | **总行数**: ~2,300
+> **最后更新**: 2026-06-16 | **版本**: v2.2 | **总行数**: ~2,200
 
 ---
 
@@ -74,7 +74,7 @@ data-structures.js → airline-system.js → app.js
 
 ```
 属性: origin, originCode, destination, destCode, flightNo, planeNo,
-      weekday, departureTime, arrivalTime, capacity, prices{1,2,3}, remaining
+      flightDate, departureTime, arrivalTime, capacity, prices{1,2,3}, remaining
 链表: bookedList (SortedLinkedList), waitQueue (LinkedQueue)
 方法: generateSeatNumbers(count), occupiedSeats(), getSeatMap(), getPrice(cabinClass)
 ```
@@ -202,19 +202,13 @@ python3 -m http.server 8000
 - localStorage 持久化
 
 ### 已知限制 ⚠️
-- **无价格差异**: 成人/儿童/婴儿票价相同 (真实航司儿童75%、婴儿10%)
-- **无往返搜索**: 仅支持单程
-- **无座位类型区分**: 靠窗/过道未标记
+- **仅支持单程**: 无往返/多程搜索
 - **未实现文件存储**: 题目要求"最好存储在文件中"，目前仅 localStorage
 - **无后端**: 所有数据仅存浏览器，多设备不同步
 - **候补队列策略简化**: 不能满足队头就停止，未实现部分满足+继续下一人
-- **座位选中**: 手动选座仅影响展示，最终仍按 `generateSeatNumbers()` 自动分配
 
 ### 未来可优化 📋
-- [ ] 儿童/婴儿票价折扣
-- [ ] 座位选择结果实际生效
 - [ ] 往返/多程搜索
-- [ ] 按价格/时长排序搜索结果
 - [ ] 导出/导入数据为 JSON 文件 (替代 localStorage)
 - [ ] 航司 Logo、真实的机场三字码数据
 - [ ] 响应式移动端优化 (当前基础支持)

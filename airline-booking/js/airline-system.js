@@ -20,21 +20,21 @@ class Flight {
    * @param {string} destCode      - 终点站三字码
    * @param {string} flightNo      - 航班号
    * @param {string} planeNo       - 飞机号/机型
-   * @param {string} weekday       - 飞行周日
+   * @param {string} flightDate    - 飞行日期 "YYYY-MM-DD"
    * @param {string} departureTime - 起飞时刻 "HH:MM"
    * @param {string} arrivalTime   - 到达时刻 "HH:MM"
    * @param {number} capacity      - 乘员定额
    * @param {object} prices        - 各舱位票价 {1:头等舱, 2:商务舱, 3:经济舱}
    */
   constructor(origin, originCode, destination, destCode, flightNo, planeNo,
-              weekday, departureTime, arrivalTime, capacity, prices) {
+              flightDate, departureTime, arrivalTime, capacity, prices) {
     this.origin = origin;
     this.originCode = originCode;
     this.destination = destination;
     this.destCode = destCode;
     this.flightNo = flightNo;
     this.planeNo = planeNo;
-    this.weekday = weekday;
+    this.flightDate = flightDate;
     this.departureTime = departureTime;
     this.arrivalTime = arrivalTime;
     this.capacity = capacity;
@@ -157,9 +157,9 @@ class AirlineSystem {
   // ======================== 航班管理 ========================
 
   addFlight(origin, originCode, destination, destCode, flightNo, planeNo,
-            weekday, departureTime, arrivalTime, capacity, prices) {
+            flightDate, departureTime, arrivalTime, capacity, prices) {
     const f = new Flight(origin, originCode, destination, destCode, flightNo,
-                         planeNo, weekday, departureTime, arrivalTime, capacity, prices);
+                         planeNo, flightDate, departureTime, arrivalTime, capacity, prices);
     const idx = this.flights.findIndex(x => x.flightNo.localeCompare(flightNo) > 0);
     if (idx === -1) this.flights.push(f);
     else this.flights.splice(idx, 0, f);
@@ -201,12 +201,9 @@ class AirlineSystem {
       f.origin.includes(origin) && f.destination.includes(destination)
     );
 
-    // 如果指定日期, 按星期几过滤
+    // 如果指定日期, 直接按飞行日期过滤
     if (dateStr) {
-      const targetDay = new Date(dateStr).getDay();
-      const MAP = ['周日','周一','周二','周三','周四','周五','周六'];
-      const targetWD = MAP[targetDay];
-      const exact = results.filter(f => f.weekday === targetWD);
+      const exact = results.filter(f => f.flightDate === dateStr);
       if (exact.length > 0) results = exact; // 优先匹配同日航班
     }
 
@@ -217,10 +214,9 @@ class AirlineSystem {
       originCode: f.originCode,
       destination: f.destination,
       destCode: f.destCode,
-      weekday: f.weekday,
+      flightDate: f.flightDate,
       departureTime: f.departureTime,
       arrivalTime: f.arrivalTime,
-      nearestDate: this._nearestDate(f.weekday),
       capacity: f.capacity,
       remaining: f.remaining,
       isFull: f.isFull,
@@ -234,18 +230,6 @@ class AirlineSystem {
     const origins = [...new Set(this.flights.map(f => `${f.origin} (${f.originCode})`))];
     const dests  = [...new Set(this.flights.map(f => `${f.destination} (${f.destCode})`))];
     return { origins, dests };
-  }
-
-  _nearestDate(weekday) {
-    const MAP = ['周日','周一','周二','周三','周四','周五','周六'];
-    const target = MAP.indexOf(weekday);
-    if (target === -1) return '--';
-    const today = new Date();
-    let delta = target - today.getDay();
-    if (delta < 0) delta += 7;
-    const d = new Date(today);
-    d.setDate(today.getDate() + delta);
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
 
   // ======================== 订票 ========================
@@ -325,8 +309,7 @@ class AirlineSystem {
         origin: f.origin,
         destination: f.destination,
         departureTime: f.departureTime,
-        weekday: f.weekday,
-        nearestDate: this._nearestDate(f.weekday),
+        flightDate: f.flightDate,
         bookingTime: bt,
       };
     }
@@ -392,7 +375,7 @@ class AirlineSystem {
           origin: f.origin,
           destination: f.destination,
           departureTime: f.departureTime,
-          weekday: f.weekday,
+          flightDate: f.flightDate,
           ticketCount: node.ticketCount,
           cabinClass: node.cabinClass,
           cabinName: cabinName(node.cabinClass),
@@ -473,7 +456,7 @@ class AirlineSystem {
       const data = this.flights.map(f => ({
         origin: f.origin, originCode: f.originCode,
         destination: f.destination, destCode: f.destCode,
-        flightNo: f.flightNo, planeNo: f.planeNo, weekday: f.weekday,
+        flightNo: f.flightNo, planeNo: f.planeNo, flightDate: f.flightDate,
         departureTime: f.departureTime, arrivalTime: f.arrivalTime,
         capacity: f.capacity, prices: f.prices, remaining: f.remaining,
         bookedList: f.bookedList.toArray(),
@@ -491,7 +474,7 @@ class AirlineSystem {
       this.flights = [];
       for (const d of data) {
         const f = new Flight(d.origin, d.originCode, d.destination, d.destCode,
-                             d.flightNo, d.planeNo, d.weekday,
+                             d.flightNo, d.planeNo, d.flightDate,
                              d.departureTime, d.arrivalTime, d.capacity, d.prices);
         f.remaining = d.remaining;
         for (const c of d.bookedList || [])
@@ -507,27 +490,27 @@ class AirlineSystem {
 
   initTestData() {
     // 北京始发
-    this.addFlight('北京','PEK','上海','SHA','CA1001','B787-9','周一','08:00','10:15',220,{1:4280,2:2180,3:680});
-    this.addFlight('北京','PEK','上海','SHA','CA1003','A350-9','周三','09:30','11:45',240,{1:4580,2:2380,3:720});
-    this.addFlight('北京','PEK','广州','CAN','CA2001','B777-3','周二','07:30','10:40',280,{1:5200,2:2680,3:880});
-    this.addFlight('北京','PEK','广州','CAN','CA2003','A330-3','周五','14:00','17:10',260,{1:4980,2:2480,3:820});
-    this.addFlight('北京','PEK','深圳','SZX','CA3001','B787-9','周四','08:30','11:35',200,{1:4680,2:2380,3:760});
-    this.addFlight('北京','PEK','成都','CTU','CA4001','A320N','周六','10:00','12:50',180,{1:3580,2:1780,3:580});
-    this.addFlight('北京','PEK','昆明','KMG','CA5001','B737-8','周三','07:00','10:20',190,{1:3980,2:1980,3:650});
-    this.addFlight('北京','PEK','三亚','SYX','CA6001','B787-9','周五','09:00','12:30',210,{1:5200,2:2680,3:880});
+    this.addFlight('北京','PEK','上海','SHA','CA1001','B787-9','2026-06-15','08:00','10:15',220,{1:4280,2:2180,3:680});
+    this.addFlight('北京','PEK','上海','SHA','CA1003','A350-9','2026-06-17','09:30','11:45',240,{1:4580,2:2380,3:720});
+    this.addFlight('北京','PEK','广州','CAN','CA2001','B777-3','2026-06-16','07:30','10:40',280,{1:5200,2:2680,3:880});
+    this.addFlight('北京','PEK','广州','CAN','CA2003','A330-3','2026-06-19','14:00','17:10',260,{1:4980,2:2480,3:820});
+    this.addFlight('北京','PEK','深圳','SZX','CA3001','B787-9','2026-06-18','08:30','11:35',200,{1:4680,2:2380,3:760});
+    this.addFlight('北京','PEK','成都','CTU','CA4001','A320N','2026-06-20','10:00','12:50',180,{1:3580,2:1780,3:580});
+    this.addFlight('北京','PEK','昆明','KMG','CA5001','B737-8','2026-06-24','07:00','10:20',190,{1:3980,2:1980,3:650});
+    this.addFlight('北京','PEK','三亚','SYX','CA6001','B787-9','2026-06-26','09:00','12:30',210,{1:5200,2:2680,3:880});
 
     // 上海始发
-    this.addFlight('上海','SHA','北京','PEK','MU1002','B787-9','周一','11:30','13:45',220,{1:4280,2:2180,3:680});
-    this.addFlight('上海','SHA','北京','PEK','MU1004','A350-9','周四','16:00','18:15',240,{1:4580,2:2380,3:720});
-    this.addFlight('上海','SHA','广州','CAN','MU2002','A330-3','周二','09:00','11:15',250,{1:3880,2:1980,3:620});
-    this.addFlight('上海','SHA','三亚','SYX','MU3002','B787-9','周六','08:00','11:10',200,{1:4280,2:2180,3:700});
-    this.addFlight('上海','SHA','成都','CTU','MU4002','A320N','周日','14:00','17:00',180,{1:3680,2:1880,3:590});
+    this.addFlight('上海','SHA','北京','PEK','MU1002','B787-9','2026-06-22','11:30','13:45',220,{1:4280,2:2180,3:680});
+    this.addFlight('上海','SHA','北京','PEK','MU1004','A350-9','2026-06-25','16:00','18:15',240,{1:4580,2:2380,3:720});
+    this.addFlight('上海','SHA','广州','CAN','MU2002','A330-3','2026-06-23','09:00','11:15',250,{1:3880,2:1980,3:620});
+    this.addFlight('上海','SHA','三亚','SYX','MU3002','B787-9','2026-06-27','08:00','11:10',200,{1:4280,2:2180,3:700});
+    this.addFlight('上海','SHA','成都','CTU','MU4002','A320N','2026-06-28','14:00','17:00',180,{1:3680,2:1880,3:590});
 
     // 广州始发
-    this.addFlight('广州','CAN','北京','PEK','CZ2002','B777-3','周二','11:30','14:40',280,{1:5200,2:2680,3:880});
-    this.addFlight('广州','CAN','上海','SHA','CZ3002','A330-3','周三','08:00','10:15',250,{1:3880,2:1980,3:620});
-    this.addFlight('广州','CAN','三亚','SYX','CZ4002','A320N','周五','07:30','09:00',160,{1:1980,2:980,3:350});
-    this.addFlight('广州','CAN','成都','CTU','CZ5002','B737-8','周四','09:30','12:00',180,{1:3280,2:1680,3:550});
+    this.addFlight('广州','CAN','北京','PEK','CZ2002','B777-3','2026-06-23','11:30','14:40',280,{1:5200,2:2680,3:880});
+    this.addFlight('广州','CAN','上海','SHA','CZ3002','A330-3','2026-06-24','08:00','10:15',250,{1:3880,2:1980,3:620});
+    this.addFlight('广州','CAN','三亚','SYX','CZ4002','A320N','2026-06-26','07:30','09:00',160,{1:1980,2:980,3:350});
+    this.addFlight('广州','CAN','成都','CTU','CZ5002','B737-8','2026-06-25','09:30','12:00',180,{1:3280,2:1680,3:550});
 
     // 预置订票数据 (含PNR)
     const f1 = this.findFlight('CA1001');
