@@ -1,0 +1,1059 @@
+四、详细设计
+
+4.1 系统结构
+
+航空客运订票系统采用分层架构设计，自上而下分为三层：用户界面层(UI Layer)、业务逻辑层(Business Layer)、数据存储层(Data Layer)。各层之间通过明确的接口进行交互，上层依赖下层，下层不感知上层。
+
+```
+用户界面层 (app.js)
+├── 航班总览 Tab
+├── 搜索航班 Tab
+├── 预订客票 Tab (3步流程)
+├── 订单管理 Tab
+├── 录入航班 Tab
+└── 公共组件: Toast / Dialog / 统计 / 导入导出
+        │
+        ▼ 调用
+业务逻辑层 (airline-system.js)
+├── AirlineSystem
+│   ├── flights[] — 航线汇总表 (顺序存储)
+│   ├── addFlight() — 录入航班
+│   ├── searchFlights() — 多条件搜索
+│   ├── bookTicket() — 订票
+│   ├── refundTicket() / refundByPNR() — 退票
+│   ├── cancelFlight() — 取消航班
+│   ├── _fulfillWaitlist() — 候补补位
+│   ├── _processRefund() — 退票核心处理
+│   ├── _generatePNR() — PNR生成
+│   └── stats() / load() / _persist() — 统计与持久化
+└── Flight
+    ├── bookedList → SortedLinkedList (按姓名排序链表)
+    ├── waitQueue → LinkedQueue (FIFO链式队列)
+    ├── generateSeatNumbers() — 自动分配座位
+    ├── getSeatMap() — 生成座位图数据
+    └── occupiedSeats() — 获取已占用座位集合
+        │
+        ▼ 操作
+数据存储层 (data-structures.js)
+├── SortedLinkedList (按姓名排序的单链表)
+│   ├── head → CustomerNode
+│   ├── insert() — 有序插入
+│   ├── search() / searchByPNR() — 查找
+│   ├── delete() / deleteByPNR() — 删除
+│   └── toArray() — 遍历导出
+├── CustomerNode (已订票客户节点)
+│   ├── name / ticketCount / cabinClass
+│   ├── seatNumbers[] / pnr
+│   ├── bookingTime / passengerType / contact
+│   └── next → CustomerNode
+├── LinkedQueue (链式队列, FIFO)
+│   ├── front → WaitNode (队头)
+│   ├── rear → WaitNode (队尾)
+│   ├── enqueue() — 入队
+│   ├── dequeue() — 出队
+│   ├── peek() — 查看队头
+│   └── isEmpty() / toArray()
+└── WaitNode (候补客户节点)
+    ├── name / ticketCount / cabinClass / contact
+    ├── enqueueTime
+    └── next → WaitNode
+        │
+        ▼ 序列化/反序列化
+浏览器 localStorage
+└── key: "airline_v2_data" (JSON)
+```
+
+数据流说明：用户操作触发UI层事件处理函数，UI层调用业务逻辑层方法，业务逻辑层操作数据存储层中的链表/队列结构，操作完成后调用_persist()将数据序列化至localStorage。界面通过refreshAll()等函数重新渲染，反映最新状态。
+
+系统共23条测试航线(国内15条+国际8条)，6条满员航班配有候补队列，8条高密度(85-95%)，9条中等密度(65-80%)。每条航班包含13项信息域(始发站、始发站代码、终点站、终点站代码、航班号、飞机号、飞行日期、起飞时刻、到达时刻、乘员定额、各舱位票价、余票数、取消标记)，以及两个链式结构指针(已订票客户链表、候补队列)。
+
+
+4.2 数据结构设计
+
+4.2.1 客户节点 (CustomerNode) — 已订票链表节点
+
+用途：存储单个已订票客户的全部信息，作为排序链表的节点。
+
+存储结构：
+  name         : string     — 客户姓名
+  ticketCount  : number     — 订票数量
+  cabinClass   : number     — 舱位等级 (1=头等舱, 2=商务舱, 3=经济舱)
+  seatNumbers  : string[]   — 分配的座位号数组 (如 ["12A","12B"])
+  pnr          : string     — 6位订票参考号 (Passenger Name Record)
+  bookingTime  : string     — 订票时间戳
+  passengerType: string     — 旅客类型 (adult/child/infant)
+  contact      : string     — 联系方式 (手机号或邮箱)
+  next         : CustomerNode|null — 指向下一节点的指针
+
+4.2.2 按姓名排序的单链表 (SortedLinkedList) — 已订票客户名单
+
+用途：每个航班维护一条按客户姓名排序的单链表，存储该航班所有已订票客户信息。支持按姓名和PNR双重查找/删除。
+
+存储结构：
+  head  : CustomerNode|null — 头指针，指向链表中姓名最小的节点
+  _size : number           — 链表长度(节点数)
+
+逻辑结构图示：
+  head → [张三|2张|经济|PNR:T00001|next] → [李四|1张|商务|PNR:T00003|next] → [王五|3张|头等|PNR:T00002|null]
+           (姓名按拼音升序: 李 < 王 < 张 → 实际顺序: 李四→王五→张三, localeCompare('zh') 处理中文排序)
+
+4.2.3 候补节点 (WaitNode) — 候补队列节点
+
+用途：存储单个候补客户信息，作为链式队列的节点。
+
+存储结构：
+  name        : string     — 客户姓名
+  ticketCount : number     — 所需票数
+  cabinClass  : number     — 舱位偏好 (1/2/3)
+  contact     : string     — 联系方式
+  enqueueTime : string     — 入队时间戳 (自动生成)
+  next        : WaitNode|null — 指向下一节点的指针
+
+4.2.4 链式队列 (LinkedQueue) — 候补客户名单
+
+用途：每个航班维护一条FIFO(先进先出)链式队列，存储等候替补的客户。队头是最早入队的客户，享有优先补位权。
+
+存储结构：
+  front : WaitNode|null — 队头指针，指向最早入队的节点
+  rear  : WaitNode|null — 队尾指针，指向最晚入队的节点
+  _size : number        — 队列长度
+
+逻辑结构图示：
+  front → [刘鹏飞|2张|经济|6/9 10:00|next] → [陈雨桐|1张|商务|6/10 14:00|next] → [赵明轩|3张|经济|6/11 09:30|null] ← rear
+           (按入队时间先后排列, 出队从front端, 入队从rear端)
+
+4.2.5 航线记录 (Flight) — 单条航班完整信息
+
+用途：封装单条航线的全部静态和动态数据，以及指向两个链式结构的指针。
+
+存储结构：
+  origin/ originCode   : string     — 始发站/三字码
+  destination/destCode : string     — 终点站/三字码
+  flightNo   : string     — 航班号 (如 "CA1001")
+  planeNo    : string     — 飞机号/机型 (如 "B787-9")
+  flightDate : string     — 飞行日期 "YYYY-MM-DD"
+  departureTime/arrivalTime : string — 起降时刻 "HH:MM"
+  capacity   : number     — 乘员定额 (总座位数)
+  prices     : object     — 各舱位票价 {1:头等, 2:商务, 3:经济}
+  remaining  : number     — 当前余票数 (初始=capacity)
+  bookedList : SortedLinkedList — 已订票客户链表 (按姓名有序)
+  waitQueue  : LinkedQueue      — 候补客户队列 (FIFO)
+  canceled   : boolean    — 航班是否已取消
+
+4.2.6 航空订票系统 (AirlineSystem) — 系统核心控制器
+
+用途：管理全部航班，提供订票、退票、搜索、候补、统计等全部业务操作。
+
+存储结构：
+  flights : Flight[] — 航线汇总表，顺序存储，按航班号升序排列
+
+航班按航班号升序插入(使用findIndex+splice维持有序性)，查找使用顺序搜索O(n)。因航线数量有限(23条)，顺序搜索性能足够。
+
+
+4.3 核心算法设计
+
+4.3.1 按姓名有序插入算法 (SortedLinkedList.insert)
+
+功能：将新订票客户按姓名拼音顺序插入已订票链表，维持链表始终有序。
+
+```mermaid
+flowchart TD
+    A[开始: 传入 name, count, cabin, seats, pnr, time, type, contact] --> B[创建新节点 node = new CustomerNode, _size++]
+    B --> C{"head == null 或 head.name > name?<br/>(localeCompare 中文拼音比较)"}
+    C -->|是| D[node.next = head<br/>head = node<br/>插入成为新头节点]
+    C -->|否| E[cur = head]
+    E --> F["while cur.next && cur.next.name <= name<br/>cur = cur.next 向后遍历"]
+    F --> G[node.next = cur.next<br/>cur.next = node<br/>在 cur 之后插入新节点]
+    D --> H[结束: 返回]
+    G --> H
+```
+
+算法描述：
+(1) 根据传入参数创建新CustomerNode节点。
+(2) 判空：若链表为空(head==null)，新节点直接成为头节点，插入完成。
+(3) 判头：若头节点姓名的localeCompare(name,'zh')结果>0(即头节点姓名拼音大于新节点)，新节点插入头部，原head成为新节点的next。
+(4) 遍历：从头节点开始，使用while循环向后查找插入位置。循环条件为cur.next存在且cur.next.name≤新节点name(拼音序)。找到第一个cur.next.name>name的位置停止。
+(5) 插入：将新节点的next指向cur.next，再将cur.next指向新节点，完成插入。
+(6) 时间复杂度：O(n)，其中n为链表长度。每次插入都需遍历找到正确位置。
+
+源程序：
+
+```
+class SortedLinkedList {
+  constructor() {
+    this.head = null;
+    this._size = 0;
+  }
+  get size() { return this._size; }
+  insert(name, ticketCount, cabinClass, seatNumbers,
+    pnr, bookingTime, passengerType, contact) {
+    /* 创建新客户节点 */
+    const node = new CustomerNode(name, ticketCount, cabinClass,
+      seatNumbers, pnr, bookingTime, passengerType, contact);
+    this._size++;
+    /* 情况1: 空链表 — 直接成为头节点 */
+    /* 情况2: 新节点姓名拼音小于头节点 — 插入头部 */
+    if (!this.head || this.head.name.localeCompare(name, 'zh') > 0) {
+      node.next = this.head;
+      this.head = node;
+      return;
+    }
+    /* 情况3: 遍历查找插入位置 */
+    let cur = this.head;
+    while (cur.next && cur.next.name.localeCompare(name, 'zh') <= 0) {
+      cur = cur.next;  /* 向后移动直到找到第一个大于name的位置 */
+    }
+    /* 在cur之后插入新节点 */
+    node.next = cur.next;
+    cur.next = node;
+  }
+```
+
+重点变量说明：
+  head     — 链表头指针，空链表时为null
+  cur      — 遍历指针，用于定位插入位置
+  node     — 新创建的节点
+  localeCompare(name,'zh') — 中文拼音字符串比较，返回负数/零/正数
+
+
+4.3.2 链式队列入队/出队算法 (LinkedQueue.enqueue / dequeue)
+
+功能：入队将新候补客户追加到队尾；出队从队头移除并返回最早入队的客户。严格FIFO。
+
+```mermaid
+flowchart TD
+    subgraph 入队 enqueue
+        A1[开始: 传入 name, count, cabin, contact] --> B1[创建新节点 node = new WaitNode, _size++]
+        B1 --> C1{"rear == null?<br/>队列是否为空"}
+        C1 -->|是| D1[front = node<br/>rear = node<br/>新节点成为唯一节点]
+        C1 -->|否| E1[rear.next = node<br/>rear = node<br/>追加到队尾]
+        D1 --> F1[结束: 返回]
+        E1 --> F1
+    end
+    subgraph 出队 dequeue
+        A2[开始] --> B2{"front == null?<br/>队列是否为空"}
+        B2 -->|是| C2[return null<br/>空队列]
+        B2 -->|否| D2["removed = front<br/>front = front.next<br/>_size--"]
+        D2 --> E2{"front == null?<br/>移除后队列为空?"}
+        E2 -->|是| F2[rear = null<br/>队列完全清空]
+        E2 -->|否| G2[return removed<br/>返回被移除的节点]
+        F2 --> G2
+    end
+```
+
+算法描述：
+(1) 入队：创建新WaitNode节点。若rear为null(队列空)，将front和rear都指向新节点；否则将rear.next指向新节点，再更新rear为新节点。_size增加1。时间复杂度O(1)。
+(2) 出队：若front为null(队列空)，返回null。否则保存front节点为removed，将front后移一位(front=front.next)。若移动后front变为null，说明队列已空，同时将rear置为null。_size减少1。返回removed节点。时间复杂度O(1)。
+(3) peek：仅返回front节点而不移除，队列结构不变。时间复杂度O(1)。
+
+源程序：
+
+```
+class LinkedQueue {
+  constructor() {
+    this.front = null;  /* 队头指针 */
+    this.rear  = null;  /* 队尾指针 */
+    this._size = 0;
+  }
+  get size() { return this._size; }
+  enqueue(name, ticketCount, cabinClass, contact) {
+    /* 创建候补节点 */
+    const node = new WaitNode(name, ticketCount, cabinClass, contact);
+    if (!this.rear) {
+      /* 队列为空: front和rear都指向新节点 */
+      this.front = this.rear = node;
+    } else {
+      /* 队列非空: 追加到rear之后, 更新rear */
+      this.rear.next = node;
+      this.rear = node;
+    }
+    this._size++;
+  }
+  dequeue() {
+    if (!this.front) return null;  /* 空队列返回null */
+    const removed = this.front;    /* 保存队头节点 */
+    this.front = this.front.next;  /* 队头后移 */
+    if (!this.front) this.rear = null;  /* 队列变空, rear同步置null */
+    this._size--;
+    return removed;
+  }
+  peek() { return this.front; }    /* 查看队头不移除 */
+  isEmpty() { return !this.front; } /* 判空 */
+```
+
+重点变量说明：
+  front   — 队头指针，出队操作从此端进行
+  rear    — 队尾指针，入队操作从此端进行
+  _size   — 队列中节点数量
+  removed — 被移除的节点，作为出队操作的返回值
+
+
+4.3.3 航班搜索算法 (AirlineSystem.searchFlights)
+
+功能：支持始发站/终点站模糊匹配、日期精确匹配、航班号模糊匹配、最低余票过滤、出发时段过滤、价格区间过滤、机型筛选、满员/取消航班开关控制、多维排序的最多10条件组合搜索。
+
+```mermaid
+flowchart TD
+    A[开始: 传入 origin, destination, dateStr, options] --> B[从 options 解构: flightNo, minSeats, timePeriod, minPrice, maxPrice, cabinClass, aircraftTypes, includeFull, includeCancelled, sortBy]
+    B --> C[results = this.flights.filter]
+    C --> D["过滤1: 取消航班检查<br/>includeCancelled=false 时排除已取消航班"]
+    D --> E["过滤2: 始发站模糊匹配<br/>origin 非空时检查 f.origin.includes(origin)"]
+    E --> F["过滤3: 终点站模糊匹配<br/>destination 非空时检查 f.destination.includes(destination)"]
+    F --> G["过滤4: 日期精确匹配<br/>dateStr 非空时要求 f.flightDate === dateStr"]
+    G --> H["过滤5: 航班号模糊匹配<br/>flightNo 非空时不区分大小写匹配"]
+    H --> I["过滤6: 最低余票检查<br/>minSeats 有值时要求 f.remaining >= minSeats"]
+    I --> J["过滤7: 满员航班过滤<br/>includeFull=false 时排除 f.isFull 航班"]
+    J --> K["过滤8: 出发时段过滤<br/>timePeriod 非空时判断起飞小时是否在时段区间"]
+    K --> L["过滤9: 价格区间过滤<br/>按 cabinClass 取票价比较 minPrice/maxPrice"]
+    L --> M["过滤10: 机型筛选<br/>aircraftTypes 非空时检查 f.planeNo 是否在列表中"]
+    M --> N{"sortBy 非空?"}
+    N -->|是| O["按指定方式排序<br/>price-asc/desc, time-asc/desc,<br/>duration-asc, remaining-desc"]
+    N -->|否| P[映射结果: 计算飞行时长 duration<br/>格式化 durationLabel<br/>提取 waitQueueSize<br/>返回扁平对象数组]
+    O --> P
+    P --> Q[结束: return results[]]
+```
+
+算法描述：
+(1) 获取所有航班数组this.flights。
+(2) 使用Array.filter依次通过10个过滤条件，各条件为独立判断：
+    - 取消航班过滤：如不允许包含已取消航班(includeCancelled=false)，则f.canceled==true的航班被排除。
+    - 始发站模糊匹配：若传入origin非空，使用String.includes检查航班始发站是否包含搜索词。
+    - 终点站模糊匹配：同始发站逻辑。
+    - 日期精确匹配：若dateStr非空，要求f.flightDate===dateStr。
+    - 航班号模糊匹配：若flightNo非空，不区分大小写contains匹配。
+    - 最低余票：若minSeats有值，要求f.remaining>=minSeats。
+    - 满员过滤：若不包含满员航班(includeFull=false)，f.remaining<=0的航班被排除。
+    - 出发时段：若timePeriod非空，解析departureTime的小时数，判断是否在对应时段区间内(morning:6-11, afternoon:12-17, evening:18-23, night:0-5)。
+    - 价格区间：若minPrice或maxPrice有值，取指定cabinClass对应票价进行比较。
+    - 机型筛选：若aircraftTypes非空数组，检查f.planeNo是否在列表中。
+(3) 若sortBy有值，对过滤结果进行排序。支持6种排序方式：价格升/降、起飞时间升/降、飞行时长升序、余票降序。
+(4) 将过滤排序后的Flight对象映射为扁平结果对象，计算飞行时长(calcDuration)和格式化时长标签(formatDuration)。
+(5) 时间复杂度：O(F+P·F)，F为航班总数，P为过滤条件数量。
+
+源程序：
+
+```
+  searchFlights(origin, destination, dateStr, options = {}) {
+    const {
+      flightNo, minSeats, timePeriod,
+      minPrice, maxPrice, cabinClass,
+      aircraftTypes, includeFull = true,
+      includeCancelled = false, sortBy,
+    } = options;
+    /* 多维过滤 */
+    let results = this.flights.filter(f => {
+      if (!includeCancelled && f.canceled) return false;
+      if (origin && !f.origin.includes(origin)) return false;
+      if (destination && !f.destination.includes(destination)) return false;
+      if (dateStr && f.flightDate !== dateStr) return false;
+      if (flightNo && !f.flightNo.toUpperCase().includes(flightNo.toUpperCase()))
+        return false;
+      if (minSeats !== undefined && minSeats !== null && f.remaining < minSeats)
+        return false;
+      if (!includeFull && f.isFull) return false;
+      if (timePeriod && timePeriod !== 'all') {
+        const hour = parseInt(f.departureTime.split(':')[0], 10);
+        const periodMap = {
+          morning: [6,12], afternoon: [12,18],
+          evening: [18,24], night: [0,6],
+        };
+        const [lo, hi] = periodMap[timePeriod] || [0, 24];
+        if (hour < lo || hour >= hi) return false;
+      }
+      if ((minPrice !== undefined && minPrice !== null) ||
+          (maxPrice !== undefined && maxPrice !== null)) {
+        const targetCabin = cabinClass || 3;
+        const price = f.prices[targetCabin];
+        if (minPrice !== undefined && minPrice !== null && price < minPrice)
+          return false;
+        if (maxPrice !== undefined && maxPrice !== null && price > maxPrice)
+          return false;
+      }
+      if (aircraftTypes && aircraftTypes.length > 0
+          && !aircraftTypes.includes(f.planeNo)) return false;
+      return true;
+    });
+    /* 服务端排序 */
+    if (sortBy) {
+      const cabinForPrice = cabinClass || 3;
+      switch (sortBy) {
+        case 'price-asc':
+          results.sort((a,b) => a.prices[cabinForPrice] - b.prices[cabinForPrice]);
+          break;
+        case 'price-desc':
+          results.sort((a,b) => b.prices[cabinForPrice] - a.prices[cabinForPrice]);
+          break;
+        case 'time-asc':
+          results.sort((a,b) => a.departureTime.localeCompare(b.departureTime));
+          break;
+        case 'time-desc':
+          results.sort((a,b) => b.departureTime.localeCompare(a.departureTime));
+          break;
+        case 'duration-asc':
+          results.sort((a,b) =>
+            AirlineSystem.calcDuration(a.departureTime,a.arrivalTime) -
+            AirlineSystem.calcDuration(b.departureTime,b.arrivalTime));
+          break;
+        case 'remaining-desc':
+          results.sort((a,b) => b.remaining - a.remaining);
+          break;
+      }
+    }
+    /* 映射为前端使用的扁平对象 */
+    return results.map(f => ({
+      flightNo: f.flightNo, planeNo: f.planeNo,
+      origin: f.origin, originCode: f.originCode,
+      destination: f.destination, destCode: f.destCode,
+      flightDate: f.flightDate,
+      departureTime: f.departureTime, arrivalTime: f.arrivalTime,
+      duration: AirlineSystem.calcDuration(f.departureTime,f.arrivalTime),
+      durationLabel: AirlineSystem.formatDuration(
+        AirlineSystem.calcDuration(f.departureTime,f.arrivalTime)),
+      capacity: f.capacity, remaining: f.remaining,
+      isFull: f.isFull, prices: { ...f.prices },
+      waitQueueSize: f.waitQueue.size,
+    }));
+  }
+```
+
+重点变量说明：
+  results    — 过滤后的航班数组，引用类型，sort会改变其顺序
+  options    — 包含所有可选过滤条件的对象，使用解构赋默认值
+  periodMap  — 时段→[起始小时,结束小时)的映射表
+  cabinForPrice — 用于价格排序的参考舱位
+
+
+4.3.4 订票算法 (AirlineSystem.bookTicket)
+
+功能：先查航班是否存在→校验订票数量→检查客户是否已在同一航班有订票记录→判断余票是否充足→若充足则生成PNR、分配座位、插入已订票链表(按姓名有序)、扣减余票；若不足则返回候补提示。
+
+```mermaid
+flowchart TD
+    A["开始: 传入 flightNo, name, ticketCount,<br/>cabinClass, passengerType, contact,<br/>customSeats, seatCabins"] --> B["f = findFlight(flightNo)"]
+    B --> C{"f == null?<br/>航班是否存在"}
+    C -->|是| D["return {success: false,<br/>message: '航班不存在'}"]
+    C -->|否| E{"ticketCount <= 0?"}
+    E -->|是| F["return {success: false,<br/>message: '订票数量必须 > 0'}"]
+    E -->|否| G{"f.bookedList.search(name)?<br/>同名客户已存在?"}
+    G -->|是| H["return {success: false,<br/>message: '已有订票记录'}"]
+    G -->|否| I{"f.remaining >= ticketCount?<br/>余票是否充足"}
+    I -->|否| J["return {success: false,<br/>canWaitlist: true,<br/>message: '余票不足'}"]
+    I -->|是| K["pnr = _generatePNR()<br/>生成全局唯一PNR编号"]
+    K --> L{"有 customSeats?<br/>用户手动选座?"}
+    L -->|是| M["验证座位数量匹配<br/>验证座位未被占用<br/>seats = customSeats"]
+    L -->|否| N["seats = generateSeatNumbers(count, cabinClass)<br/>自动分配座位"]
+    M --> O["bt = now() 生成订票时间<br/>typeMultiplier = {adult:1.0, child:0.75, infant:0.1}"]
+    N --> O
+    O --> P["bookedList.insert(name, count, cabin,<br/>seats, pnr, bt, passengerType, contact)<br/>按姓名拼音有序插入链表"]
+    P --> Q["f.remaining -= ticketCount<br/>扣减余票"]
+    Q --> R["计算总价 totalPrice<br/>跨舱位选座→逐座按实际舱位计价×折扣<br/>统一舱位→price × count × typeMultiplier"]
+    R --> S["this._persist()<br/>持久化到 localStorage"]
+    S --> T["return {success: true, pnr, seats,<br/>totalPrice, cabinName, ...}"]
+```
+
+算法描述：
+(1) 查航班：通过findFlight按航班号顺序搜索flights数组，找不到返回失败。
+(2) 验数量：ticketCount必须>0，否则返回失败。
+(3) 验重名：在航班bookedList中按姓名search，若已存在同名客户返回失败(防止重复订票)。
+(4) 判余票：若f.remaining>=ticketCount，进入订票流程；否则返回canWaitlist=true，引导用户加入候补队列。
+(5) 生成PNR：调用_generatePNR()生成全局唯一的6位字母数字混合编号。
+(6) 分配座位：若提供了手动选座customSeats，验证数量匹配和座位未被占用后直接使用；否则调用generateSeatNumbers自动分配。
+(7) 插入链表：调用bookedList.insert()，自动按姓名拼音排序插入。
+(8) 扣减余票：f.remaining减去订票数量。
+(9) 计价：根据舱位、票数、旅客类型折扣乘数计算总价。跨舱位选座时逐座按所在舱位单独计价后汇总。
+(10) 持久化：调用_persist()将当前状态写入localStorage。
+(11) 返回成功结果，包含PNR、座位号、总价等完整信息。
+
+源程序：
+
+```
+  bookTicket(flightNo, name, ticketCount, cabinClass, passengerType,
+             contact, customSeats, seatCabins) {
+    const f = this.findFlight(flightNo);
+    if (!f) return { success: false, message: `航班 ${flightNo} 不存在` };
+    if (ticketCount <= 0)
+      return { success: false, message: '订票数量必须 > 0' };
+    if (f.bookedList.search(name))
+      return { success: false,
+        message: `${name} 已在该航班有订票记录, 请使用其他姓名或先退票` };
+    if (f.remaining >= ticketCount) {
+      /* ———— 余票充足: 生成PNR + 分配座位 + 插入链表 ———— */
+      const pnr = this._generatePNR();  /* 生成全局唯一PNR */
+      let seats;
+      if (customSeats && customSeats.length > 0) {
+        /* 手动选座: 验证数量匹配和座位未被占用 */
+        if (customSeats.length !== ticketCount)
+          return { success: false,
+            message: `选座数量与订票数量不匹配` };
+        const occupied = f.occupiedSeats();
+        for (const s of customSeats) {
+          if (occupied.has(s))
+            return { success: false,
+              message: `座位 ${s} 已被占用, 请重新选择` };
+        }
+        seats = [...customSeats];
+      } else {
+        seats = f.generateSeatNumbers(ticketCount, cabinClass);
+        /* 自动分配座位 */
+      }
+      const bt = new Date().toLocaleString('zh-CN');
+      /* 插入按姓名排序的已订票链表 */
+      f.bookedList.insert(name, ticketCount, cabinClass,
+        seats, pnr, bt, passengerType, contact);
+      f.remaining -= ticketCount;  /* 扣减余票 */
+      /* 旅客类型折扣乘数 */
+      const typeMultiplier =
+        { adult:1.0, child:0.75, infant:0.1 }[passengerType] || 1.0;
+      /* 跨舱位选座: 逐座按实际舱位计价 */
+      let totalPrice, cabinDetail;
+      if (seatCabins && customSeats) {
+        totalPrice = Math.round(customSeats.reduce(
+          (sum, s) => sum + f.getPrice(seatCabins[s] || cabinClass), 0
+        ) * typeMultiplier);
+        const tally = {};
+        for (const c of Object.values(seatCabins))
+          tally[c] = (tally[c] || 0) + 1;
+        const parts = [];
+        if (tally[1]) parts.push(`头等×${tally[1]}`);
+        if (tally[2]) parts.push(`商务×${tally[2]}`);
+        if (tally[3]) parts.push(`经济×${tally[3]}`);
+        cabinDetail = parts.join('+');
+      } else {
+        totalPrice = Math.round(
+          f.getPrice(cabinClass) * ticketCount * typeMultiplier);
+        cabinDetail = null;
+      }
+      this._persist();  /* 持久化到localStorage */
+      return {
+        success: true, message: `订票成功! ${name}`,
+        name, pnr, seatNumbers: seats,
+        cabinClass, cabinName: cabinName(cabinClass),
+        cabinDetail, ticketCount, totalPrice,
+        passengerType, typeMultiplier, currency: 'CNY',
+        flightNo, origin: f.origin, destination: f.destination,
+        departureTime: f.departureTime, flightDate: f.flightDate,
+        bookingTime: bt,
+      };
+    }
+    /* ———— 余票不足: 引导候补 ———— */
+    return {
+      success: false,
+      message: `余票不足 (剩余 ${f.remaining} 张, 需要 ${ticketCount} 张)`,
+      remaining: f.remaining, canWaitlist: true,
+    };
+  }
+```
+
+重点变量说明：
+  f              — 当前操作的Flight对象
+  pnr            — 新生成的6位唯一订票参考号
+  seats          — 分配的座位号数组，如["12A","12B"]
+  bt             — 订票时间，使用toLocaleString('zh-CN')格式
+  typeMultiplier — 旅客类型折扣乘数(成人1.0/儿童0.75/婴儿0.1)
+  totalPrice     — 最终票价，已应用折扣并四舍五入
+  seatCabins     — 手动选座时每座对应舱位的映射表{seatId: cabinClass}
+
+
+4.3.5 座位自动分配算法 (Flight.generateSeatNumbers)
+
+功能：根据目标舱位自动分配指定数量的空余座位。采用"目标舱位优先+全局回退"两轮策略，支持跨舱位回退分配。
+
+```mermaid
+flowchart TD
+    A["开始: 传入 count, cabinClass"] --> B["初始化: L=['A','B','C','D','E','F']<br/>totalRows = ceil(capacity/6)<br/>firstRows = min(2, totalRows)<br/>businessRows = min(3, totalRows-firstRows)<br/>economyStart = firstRows + businessRows + 1"]
+    B --> C{"cabinClass?"}
+    C -->|1 头等| D["rowStart=1, rowEnd=firstRows<br/>validCols=['A','C','D','F']"]
+    C -->|2 商务| E["rowStart=firstRows+1<br/>rowEnd=firstRows+businessRows<br/>validCols=['A','C','D','F']"]
+    C -->|3 经济| F["rowStart=economyStart, rowEnd=totalRows<br/>validCols=['A','B','C','D','E','F']"]
+    D --> G["occupied = occupiedSeats()<br/>获取已占用座位Set<br/>seats = []"]
+    E --> G
+    F --> G
+    G --> H["🔹 第一轮: 目标舱位内分配<br/>for r = rowStart..rowEnd<br/>  for col of validCols<br/>    if seats.length >= count break<br/>    seatId = r+col<br/>    检查: globalIdx <= capacity<br/>      && !occupied.has(seatId)<br/>      && !seats.includes(seatId)<br/>    → seats.push(seatId)"]
+    H --> I{"seats.length >= count?"}
+    I -->|是| J["return seats<br/>返回座位号数组"]
+    I -->|否| K["🔹 第二轮: 全局回退<br/>for r = 1..totalRows<br/>  for col of L (全部6列)<br/>    if seats.length >= count break<br/>    同第一轮检查逻辑<br/>    → seats.push(seatId)"]
+    K --> J
+```
+
+算法描述：
+(1) 计算舱位分区边界：根据capacity计算totalRows=ceil(capacity/6)；头等舱占前2排(不足时取实际剩余)；商务舱占随后3排；经济舱占剩余所有排。
+(2) 确定目标舱位的行列范围：头等舱rows 1-2, cols A/C/D/F；商务舱rows 3-5, cols A/C/D/F；经济舱rows 6+, cols A-F全部6列。
+(3) 获取已占用座位集合：遍历bookedList收集所有已分配座位号到Set中，O(1)查找。
+(4) 第一轮(目标舱位内)：在目标舱位对应的行列范围内遍历，每找到一个空余座位即加入seats数组，直到满足count需求或遍历完毕。
+(5) 第二轮(全局回退)：若第一轮未分配够(目标舱位空座不足)，从第1排开始遍历所有座位，跳过已占用和已分配的，补充进seats数组。
+(6) 每轮都进行三重检查：座位序号不超过capacity、未被占用(不在occupied Set中)、未被本轮重复分配(不在seats数组中)。
+(7) 时间复杂度：O(R·C)，R=总排数，C=每排列数，最坏遍历所有座位两次。
+
+源程序：
+
+```
+  generateSeatNumbers(count, cabinClass = 3) {
+    const L = ['A','B','C','D','E','F'];
+    const totalRows = Math.ceil(this.capacity / 6);
+    const firstRows = Math.min(2, totalRows);
+    const businessRows = Math.min(3, Math.max(0, totalRows - firstRows));
+    const economyStart = firstRows + businessRows + 1;
+    /* 确定目标舱位的行列范围 */
+    let rowStart, rowEnd, validCols;
+    if (cabinClass === 1) {
+      rowStart = 1; rowEnd = firstRows;
+      validCols = ['A','C','D','F'];
+    } else if (cabinClass === 2) {
+      rowStart = firstRows + 1; rowEnd = firstRows + businessRows;
+      validCols = ['A','C','D','F'];
+    } else {
+      rowStart = economyStart; rowEnd = totalRows;
+      validCols = ['A','B','C','D','E','F'];
+    }
+    const occupied = this.occupiedSeats();  /* 已占用座位集合 */
+    const seats = [];
+    /* 第一轮: 在目标舱位内分配 */
+    for (let r = rowStart; r <= rowEnd && seats.length < count; r++) {
+      for (const col of validCols) {
+        if (seats.length >= count) break;
+        const seatId = `${r}${col}`;
+        const colIdx = L.indexOf(col);
+        const globalIdx = (r - 1) * 6 + colIdx + 1;
+        if (globalIdx <= this.capacity
+            && !occupied.has(seatId)
+            && !seats.includes(seatId)) {
+          seats.push(seatId);
+        }
+      }
+    }
+    /* 第二轮 (回退): 目标舱位不足时从全局空座补充 */
+    if (seats.length < count) {
+      for (let r = 1; r <= totalRows && seats.length < count; r++) {
+        for (const col of L) {
+          if (seats.length >= count) break;
+          const seatId = `${r}${col}`;
+          const colIdx = L.indexOf(col);
+          const globalIdx = (r - 1) * 6 + colIdx + 1;
+          if (globalIdx <= this.capacity
+              && !occupied.has(seatId)
+              && !seats.includes(seatId)) {
+            seats.push(seatId);
+          }
+        }
+      }
+    }
+    return seats;
+  }
+
+  occupiedSeats() {
+    const set = new Set();
+    for (const c of this.bookedList.toArray()) {
+      for (const s of c.seatNumbers || []) set.add(s);
+    }
+    return set;
+  }
+```
+
+重点变量说明：
+  L[]         — 6列字母数组，用于计算列索引
+  totalRows   — 总排数 = ceil(capacity/6)
+  firstRows   — 头等舱排数(≤2)
+  businessRows— 商务舱排数(≤3)
+  economyStart— 经济舱起始排号
+  validCols   — 目标舱位的有效列数组(头等/商务4列，经济6列)
+  occupied    — Set<string>，已占用座位号的哈希集合，用于O(1)查重
+  seats[]     — 本次分配结果的座位号数组
+  globalIdx   — 座位的全局序号(1-based)，用于判断是否超出capacity
+
+
+4.3.6 退票与候补自动补位算法 (AirlineSystem._processRefund + _fulfillWaitlist)
+
+功能：退票释放座位后，自动遍历候补队列，按FIFO顺序将满足条件的候补客户依次补入。采用"全有或全无"策略——队头需求超过余票时停止，不跳过任何人，保证队列公平性。
+
+```mermaid
+flowchart TD
+    subgraph _processRefund
+        A["开始: _processRefund(flight, removedNode)"] --> B["refunded = removedNode.ticketCount<br/>flight.remaining += refunded<br/>释放票额, 余票增加"]
+        B --> C["fulfilled = _fulfillWaitlist(flight)<br/>尝试从候补队列补位"]
+        C --> D["this._persist()<br/>持久化到 localStorage"]
+        D --> E["return {success: true,<br/>refundedCount, pnr, fulfilled}"]
+    end
+    subgraph _fulfillWaitlist
+        F["开始: _fulfillWaitlist(flight)"] --> G["fulfilled = []<br/>初始化补位成功列表"]
+        G --> H{"while !waitQueue.isEmpty()<br/>&& remaining > 0"}
+        H -->|条件成立| I["front = waitQueue.peek()<br/>查看队头(不移除)"]
+        I --> J{"remaining >= front.ticketCount?<br/>余票是否满足队头需求"}
+        J -->|是| K["waitQueue.dequeue() 队头出队<br/>remaining -= front.ticketCount<br/>newPNR = _generatePNR()<br/>seats = generateSeatNumbers(...)<br/>bt = now()"]
+        J -->|否| L["break<br/>队头不满足, 停止循环<br/>保持队列顺序不变"]
+        K --> M["bookedList.insert(front.name,<br/>front.ticketCount, front.cabinClass,<br/>seats, newPNR, bt, 'adult', contact)<br/>候补客户转为已订票"]
+        M --> N["fulfilled.push({name, ticketCount,<br/>seatNumbers, pnr})<br/>记录补位成功信息"]
+        N --> H
+        H -->|条件不成立<br/>队列空或无余票| O["return fulfilled<br/>返回补位列表"]
+    end
+```
+
+算法描述：
+(1) _processRefund接收退票节点，获取退票数量refunded=ticketCount。
+(2) 释放票额：flight.remaining+=refunded，将退掉的座位重新标记为可用。
+(3) 调用_fulfillWaitlist尝试从候补队列中补位：
+    (a) while循环条件：候补队列非空且有余票。
+    (b) peek()查看队头节点(不移除)，获取其需求量front.ticketCount。
+    (c) 若remaining>=front.ticketCount：dequeue()移除队头，扣减余票，生成新PNR和座位，将候补客户插入已订票链表(按姓名有序)，记录到fulfilled数组。
+    (d) 若remaining<front.ticketCount：break终止循环。这是"全有或全无"策略——不跳过队头继续尝试下一位，保证FIFO队列公平性。
+(4) 持久化并返回结果，包含退票信息和被自动补位的候补客户列表。
+(5) 时间复杂度：O(W·N)，W为候补队列中被满足的人数，N为链表插入的遍历长度。
+
+源程序：
+
+```
+  _processRefund(flight, removedNode) {
+    const refunded = removedNode.ticketCount;
+    flight.remaining += refunded;  /* 释放票额 */
+    const pnr = removedNode.pnr;
+    const name = removedNode.name;
+    /* 尝试从候补队列自动补位 */
+    const fulfilled = this._fulfillWaitlist(flight);
+    this._persist();
+    return {
+      success: true,
+      message: `${name} 退票 ${refunded} 张 (PNR: ${pnr} 已作废)`,
+      refundedCount: refunded, pnr, fulfilled,
+    };
+  }
+
+  _fulfillWaitlist(flight) {
+    const fulfilled = [];
+    /* while循环: 队列非空且有剩余座位 */
+    while (!flight.waitQueue.isEmpty() && flight.remaining > 0) {
+      const front = flight.waitQueue.peek();  /* 查看队头 */
+      if (flight.remaining >= front.ticketCount) {
+        /* 队头需求可满足: 出队并办理订票 */
+        flight.waitQueue.dequeue();
+        flight.remaining -= front.ticketCount;
+        const newPNR = this._generatePNR();
+        const seats = flight.generateSeatNumbers(
+          front.ticketCount, front.cabinClass);
+        const bt = new Date().toLocaleString('zh-CN');
+        flight.bookedList.insert(front.name, front.ticketCount,
+          front.cabinClass, seats, newPNR, bt, 'adult', front.contact);
+        fulfilled.push({
+          name: front.name,
+          ticketCount: front.ticketCount,
+          seatNumbers: seats,
+          pnr: newPNR,
+        });
+      } else {
+        /* 队头需求超过余票: 停止, 保持队列顺序不变 */
+        break;
+      }
+    }
+    return fulfilled;
+  }
+```
+
+重点变量说明：
+  refunded     — 本次退票释放的票数
+  fulfilled[]  — 被自动补位的候补客户列表
+  front        — 候补队列队头节点(peek不移除)
+  remaining    — 航班当前余票数，退票增加，补位减少
+  break条件    — 队头需求>余票时立即跳出，保证不跳过任何人
+
+
+4.3.7 PNR生成算法 (AirlineSystem._generatePNR)
+
+功能：生成全局唯一的6位订票参考号(PNR)，由大写字母和数字混合组成。
+
+```mermaid
+flowchart TD
+    A[开始] --> B["chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'<br/>字符集32个字符, 排除 I/O/0/1 避免混淆"]
+    B --> C["do {<br/>  pnr = ''<br/>  for i = 0..5<br/>    pnr += chars[random()]<br/>  随机选取6个字符拼接<br/>} while (_pnrExists(pnr))"]
+    C --> D{"_pnrExists(pnr)?<br/>遍历所有航班已订票链表<br/>检查 PNR 是否已被使用"}
+    D -->|是 已存在| C
+    D -->|否 唯一| E["return pnr<br/>返回6位唯一PNR字符串"]
+```
+
+算法描述：
+(1) 字符集为32个大写字母+数字，排除I/O/0/1四个易混淆字符。
+(2) 使用do-while循环：每次随机从chars中选取6个字符拼接为PNR。
+(3) 调用_pnrExists遍历所有航班的所有已订票客户，检查PNR是否已被使用。
+(4) 若已存在则重新生成，直到生成一个全局唯一的PNR。
+(5) 理论空间32^6≈10.7亿，实际航线23条、订票人数有限，碰撞概率极低，通常一次即命中。
+(6) 时间复杂度：期望O(1)，最坏O(∞)但概率可忽略。
+
+源程序：
+
+```
+  _generatePNR() {
+    /* 字符集: 32个字符, 排除易混淆的 I/O/0/1 */
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let pnr;
+    do {
+      pnr = '';
+      for (let i = 0; i < 6; i++)
+        pnr += chars[Math.floor(Math.random() * chars.length)];
+    } while (this._pnrExists(pnr));  /* 全局唯一性检查 */
+    return pnr;
+  }
+
+  _pnrExists(pnr) {
+    return this.flights.some(f => f.bookedList.searchByPNR(pnr) !== null);
+  }
+```
+
+重点变量说明：
+  chars    — 32字符候选集(排除I/O/0/1)
+  pnr      — 生成的6位PNR字符串
+  _pnrExists — 遍历所有航班链表检查PNR是否重复
+
+
+4.3.8 航班取消算法 (AirlineSystem.cancelFlight)
+
+功能：一键取消航班——自动退票所有已订票旅客，清空候补队列，标记航班为已取消状态。
+
+```mermaid
+flowchart TD
+    A["开始: cancelFlight(flightNo)"] --> B["f = findFlight(flightNo)"]
+    B --> C{"f 不存在或已取消?"}
+    C -->|是| D["return {success: false, message: '...'}"]
+    C -->|否| E["allBooked = f.bookedList.toArray()<br/>获取已订票客户快照<br/>allWait = f.waitQueue.toArray()<br/>获取候补队列快照"]
+    E --> F["遍历 allBooked 逐人退票<br/>for each c in allBooked:<br/>  removed = f.bookedList.delete(c.name)<br/>  if removed:<br/>    f.remaining += removed.ticketCount<br/>    记录到 refundedPassengers[]"]
+    F --> G["清空候补队列<br/>记录到 waitlistedPassengers[]<br/>f.waitQueue = new LinkedQueue()<br/>重建空队列 (不触发补位)"]
+    G --> H["f.canceled = true<br/>f.remaining = 0<br/>标记航班已取消, 余票归零"]
+    H --> I["this._persist()<br/>持久化到 localStorage"]
+    I --> J["return {success: true,<br/>refundedPassengers,<br/>waitlistedPassengers,<br/>totalRefundedTickets, pnrList, ...}"]
+```
+
+算法描述：
+(1) 通过findFlight查找航班，校验存在且未被取消。
+(2) 获取已订票客户快照(toArray)：因为退款过程中会修改链表，先用toArray快照保存客户列表。
+(3) 遍历快照中的每位客户，调用bookedList.delete删除，释放对应票数(remaining+=ticketCount)，记录退款信息(name,ticketCount,pnr,cabinClass,seatNumbers)。
+(4) 获取候补队列快照，记录候补客户信息，然后重建空LinkedQueue清空队列。
+(5) 标记航班状态：canceled=true, remaining=0。
+(6) 注意：航班取消时不触发_fulfillWaitlist，因为后续所有候补都被清退，补位无意义。
+(7) 持久化并返回完整的退款和清退明细。
+(8) 时间复杂度：O(B)，B为已订票客户数。
+
+源程序：
+
+```
+  cancelFlight(flightNo) {
+    const f = this.findFlight(flightNo);
+    if (!f) return { success: false, message: `航班 ${flightNo} 不存在` };
+    if (f.canceled)
+      return { success: false, message: `航班 ${flightNo} 已被取消` };
+    const refundedPassengers = [];
+    const waitlistedPassengers = [];
+    /* 逐人退票 (快照遍历: 退款过程中链表会被修改) */
+    const allBooked = f.bookedList.toArray();
+    for (const c of allBooked) {
+      const removed = f.bookedList.delete(c.name);
+      if (removed) {
+        f.remaining += removed.ticketCount;  /* 释放票额 */
+        refundedPassengers.push({
+          name: removed.name,
+          ticketCount: removed.ticketCount,
+          pnr: removed.pnr,
+          cabinClass: removed.cabinClass,
+          cabinName: cabinName(removed.cabinClass),
+          seatNumbers: removed.seatNumbers || [],
+        });
+      }
+    }
+    /* 清空候补队列 (不触发补位) */
+    const allWait = f.waitQueue.toArray();
+    for (const w of allWait) {
+      waitlistedPassengers.push({
+        name: w.name, ticketCount: w.ticketCount,
+        cabinClass: w.cabinClass,
+        cabinName: cabinName(w.cabinClass), contact: w.contact,
+      });
+    }
+    f.waitQueue = new LinkedQueue();  /* 重建空队列 */
+    /* 标记已取消 */
+    f.canceled = true;
+    f.remaining = 0;
+    this._persist();
+    const totalRefunded = refundedPassengers.reduce(
+      (s, r) => s + r.ticketCount, 0);
+    const pnrList = refundedPassengers.map(r => r.pnr);
+    return {
+      success: true,
+      message: `航班 ${flightNo} 已取消, 共退票 ${totalRefunded} 张`,
+      flightNo, origin: f.origin, destination: f.destination,
+      flightDate: f.flightDate,
+      refundedPassengers, waitlistedPassengers,
+      totalRefundedTickets: totalRefunded,
+      totalRefundedPassengers: refundedPassengers.length,
+      totalWaitlisted: waitlistedPassengers.length,
+      pnrList,
+    };
+  }
+```
+
+重点变量说明：
+  allBooked  — 已订票客户的快照数组(防止遍历过程中链表被修改)
+  allWait    — 候补队列的快照数组
+  refundedPassengers[] — 退票明细列表
+  waitlistedPassengers[] — 被清退的候补客户列表
+  canceled=true — 航班取消标记，后续搜索/订票操作会排除此航班
+
+
+4.3.9 数据持久化算法 (AirlineSystem._persist + load)
+
+功能：将内存中所有航班数据(含链表和队列)序列化为JSON字符串存入localStorage；启动时从localStorage读取并重建所有链式结构。
+
+```mermaid
+flowchart TD
+    subgraph _persist 持久化
+        A[开始: _persist] --> B["data = flights.map(f => ({<br/>  基础属性..., remaining, canceled,<br/>  bookedList: f.bookedList.toArray(),<br/>  waitQueue: f.waitQueue.toArray()<br/>}))<br/>链表/队列 → 纯数组"]
+        B --> C["localStorage.setItem(<br/>  'airline_v2_data',<br/>  JSON.stringify(data))<br/>写入浏览器本地存储"]
+        C --> D[结束 (错误时 catch 并 console.warn)]
+    end
+    subgraph load 加载
+        E[开始: load] --> F["raw = localStorage.getItem('airline_v2_data')"]
+        F --> G{"raw 为空?"}
+        G -->|是| H["return false<br/>无存储数据"]
+        G -->|否| I["data = JSON.parse(raw)<br/>this.flights = []"]
+        I --> J["遍历 data 每条记录<br/>for d of data:<br/>  f = new Flight(d.origin, ...)<br/>  恢复基础属性<br/>  f.remaining = d.remaining<br/>  f.canceled = d.canceled"]
+        J --> K["重建已订票链表<br/>for c of d.bookedList<br/>  f.bookedList.insert(<br/>    c.name, c.ticketCount, c.cabinClass,<br/>    c.seatNumbers, c.pnr,<br/>    c.bookingTime, c.passengerType, c.contact)<br/>  按姓名有序逐个插入"]
+        K --> L["重建候补队列<br/>for w of d.waitQueue<br/>  f.waitQueue.enqueue(<br/>    w.name, w.ticketCount,<br/>    w.cabinClass, w.contact)<br/>  按原顺序逐个入队"]
+        L --> M["this.flights.push(f)"]
+        M --> N["自动补位<br/>for f of this.flights:<br/>  if f.remaining > 0<br/>  && !f.waitQueue.isEmpty()<br/>    _fulfillWaitlist(f)<br/>恢复后有空位+有候补 → 自动补入"]
+        N --> O["return true<br/>加载成功"]
+    end
+```
+
+算法描述：
+(1) 持久化(_persist)：遍历所有航班，将每个航班的bookedList通过toArray()转为纯对象数组，waitQueue同理。基础属性直接取值。将转换后的数据JSON.stringify写入localStorage键"airline_v2_data"。
+(2) 加载(load)：从localStorage读取JSON字符串，JSON.parse解析为对象数组。遍历数组中每条记录：new Flight恢复基础属性，然后遍历bookedList数组逐个调用insert重建排序链表，遍历waitQueue数组逐个调用enqueue重建队列。所有航班重建完成后，检查有剩余座位且有候补队列的航班，自动调用_fulfillWaitlist补位。
+(3) 错误处理：整个过程包裹在try-catch中，任何异常返回false，由调用方降级为initTestData()。
+
+源程序：
+
+```
+  _persist() {
+    try {
+      const data = this.flights.map(f => ({
+        origin: f.origin, originCode: f.originCode,
+        destination: f.destination, destCode: f.destCode,
+        flightNo: f.flightNo, planeNo: f.planeNo,
+        flightDate: f.flightDate,
+        departureTime: f.departureTime, arrivalTime: f.arrivalTime,
+        capacity: f.capacity, prices: f.prices,
+        remaining: f.remaining, canceled: f.canceled || false,
+        bookedList: f.bookedList.toArray(),  /* 链表→数组 */
+        waitQueue: f.waitQueue.toArray(),    /* 队列→数组 */
+      }));
+      localStorage.setItem('airline_v2_data', JSON.stringify(data));
+    } catch (e) {
+      console.warn('数据保存失败, 请检查浏览器存储空间', e);
+    }
+  }
+
+  load() {
+    try {
+      const raw = localStorage.getItem('airline_v2_data');
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      this.flights = [];
+      for (const d of data) {
+        /* 恢复Flight基础属性 */
+        const f = new Flight(d.origin, d.originCode,
+          d.destination, d.destCode, d.flightNo, d.planeNo,
+          d.flightDate, d.departureTime, d.arrivalTime,
+          d.capacity, d.prices);
+        f.remaining = d.remaining;
+        f.canceled = d.canceled || false;
+        /* 重建已订票链表 (按姓名有序插入) */
+        for (const c of d.bookedList || [])
+          f.bookedList.insert(c.name, c.ticketCount,
+            c.cabinClass, c.seatNumbers || [],
+            c.pnr, c.bookingTime, c.passengerType, c.contact);
+        /* 重建候补队列 (按原顺序入队) */
+        for (const w of d.waitQueue || [])
+          f.waitQueue.enqueue(w.name, w.ticketCount,
+            w.cabinClass, w.contact);
+        this.flights.push(f);
+      }
+      /* 恢复后自动补位: 有空位+有候补 → 补进去 */
+      for (const f of this.flights) {
+        if (f.remaining > 0 && !f.waitQueue.isEmpty()) {
+          this._fulfillWaitlist(f);
+        }
+      }
+      return true;
+    } catch (e) {
+      console.warn('数据加载失败, 将使用测试数据', e);
+      return false;
+    }
+  }
+```
+
+重点变量说明：
+  data           — flights.map后的纯数据数组，所有链式结构已转为普通数组
+  JSON.stringify — 序列化为JSON字符串
+  d.bookedList   — 从localStorage恢复的已订票客户数组
+  d.waitQueue    — 从localStorage恢复的候补客户数组
+  重建过程       — 逐个insert/enqueue，维持原有的排序和FIFO顺序
+
+
+4.3.10 飞行时长计算算法 (AirlineSystem.calcDuration + formatDuration)
+
+功能：根据起飞和到达时刻计算飞行分钟数，处理跨日航班，格式化输出。
+
+```mermaid
+flowchart TD
+    A["开始: calcDuration(depTime, arrTime)"] --> B["解析 'HH:MM' 格式<br/>[dH, dM] = depTime.split(':')<br/>[aH, aM] = arrTime.split(':')"]
+    B --> C["转换为分钟数<br/>depMins = dH * 60 + dM<br/>arrMins = aH * 60 + aM"]
+    C --> D["mins = arrMins - depMins"]
+    D --> E{"mins < 0?<br/>跨日航班"}
+    E -->|是| F["mins += 24 * 60<br/>加1440分钟(24小时)<br/>如: 23:00起飞→次日08:00到达"]
+    E -->|否| G["return mins<br/>返回飞行分钟数"]
+    F --> G
+    H["formatDuration(mins)"] --> I["h = floor(mins / 60)<br/>m = mins % 60"]
+    I --> J{"m > 0?"}
+    J -->|是| K["return 'XhYm'<br/>如: '2h30m'"]
+    J -->|否| L["return 'Xh'<br/>如: '2h'"]
+```
+
+源程序：
+
+```
+  static calcDuration(depTime, arrTime) {
+    const [dH, dM] = depTime.split(':').map(Number);
+    const [aH, aM] = arrTime.split(':').map(Number);
+    let mins = (aH * 60 + aM) - (dH * 60 + dM);
+    if (mins < 0) mins += 24 * 60;  /* 跨日到达: 加24小时 */
+    return mins;
+  }
+  static formatDuration(mins) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  }
+```
+
+算法描述：
+(1) 解析"HH:MM"格式的时和分。
+(2) 将到达时刻和起飞时刻分别转换为从零点算起的分钟数。
+(3) 到达分钟数减去起飞分钟数得到飞行时长。
+(4) 若结果为负数(如起飞23:00到达次日08:00)，加上一天的总分钟数1440，处理跨日航班。
+(5) formatDuration将分钟数格式化为"XhYm"或"Xh"的可读形式。
+
+
+4.4 存储结构总结
+
+| 数据项           | 存储结构              | 逻辑特点                          | 实现位置              |
+|-----------------|----------------------|----------------------------------|----------------------|
+| 航线汇总表       | 顺序表(Array)        | 按航班号升序，顺序查找O(n)         | AirlineSystem.flights|
+| 已订票客户名单    | 排序单链表            | 按姓名拼音升序, 含头指针          | Flight.bookedList    |
+| 已订票客户节点    | CustomerNode         | 8个数据域+next指针               | data-structures.js   |
+| 候补客户名单      | 链式队列              | front队头+rear队尾, FIFO          | Flight.waitQueue     |
+| 候补客户节点      | WaitNode             | 4个数据域+enqueueTime+next指针   | data-structures.js   |
+| PNR编号          | 6位字符串             | 32字符集(排除I/O/0/1), 全局唯一   | _generatePNR()       |
+| 座位号           | "排号+列字母"字符串    | 如"12A", 每排6座A-F              | generateSeatNumbers()|
+| 持久化存储        | localStorage         | JSON序列化, 键"airline_v2_data"  | _persist() / load()  |
+| 座位占用状态      | Set<string>          | 运行时临时构建, O(1)查找          | occupiedSeats()      |
+
+数据关系：每条Flight通过bookedList指针关联一条CustomerNode排序链表，通过waitQueue指针关联一条WaitNode链式队列(FIFO)。AirlineSystem通过flights[]数组管理所有Flight对象。各航班之间的已订票客户和候补客户完全独立，互不干扰。
+
+存储空间分析：
+  航线汇总表: 23个Flight对象，每个约200字节，共约4.6KB。
+  已订票链表: 约400+个CustomerNode(总订票人数)，每个约300字节，共约120KB。
+  候补队列: 约20个WaitNode，每个约200字节，共约4KB。
+  localStorage序列化后总大小约150KB，远低于浏览器5-10MB限制。

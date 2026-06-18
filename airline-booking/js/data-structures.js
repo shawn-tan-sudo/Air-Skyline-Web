@@ -26,7 +26,8 @@ class CustomerNode {
    * @param {string}   passengerType - 旅客类型: adult/child/infant
    * @param {string}   contact      - 联系方式 (手机号或邮箱)
    */
-  constructor(name, ticketCount, cabinClass, seatNumbers, pnr, bookingTime, passengerType, contact) {
+  constructor(name, ticketCount, cabinClass, seatNumbers, 
+    pnr, bookingTime, passengerType, contact) {
     this.name = name;
     this.ticketCount = ticketCount;
     this.cabinClass = cabinClass;
@@ -49,8 +50,10 @@ class SortedLinkedList {
 
   get size() { return this._size; }
 
-  insert(name, ticketCount, cabinClass, seatNumbers, pnr, bookingTime, passengerType, contact) {
-    const node = new CustomerNode(name, ticketCount, cabinClass, seatNumbers, pnr, bookingTime, passengerType, contact);
+  insert(name, ticketCount, cabinClass, seatNumbers, 
+    pnr, bookingTime, passengerType, contact) {
+    const node = new CustomerNode(name, ticketCount, cabinClass, 
+      seatNumbers, pnr, bookingTime, passengerType, contact);
     this._size++;
 
     if (!this.head || this.head.name.localeCompare(name, 'zh') > 0) {

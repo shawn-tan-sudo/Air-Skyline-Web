@@ -25,12 +25,12 @@
 </header>
 
 <!-- ==================== 标签导航 ==================== -->
-<nav class="tab-nav">
-  <button class="tab-btn active" data-tab="tab-overview">📊 航班总览</button>
-  <button class="tab-btn" data-tab="tab-search">🔍 搜索航班</button>
-  <button class="tab-btn" data-tab="tab-book">🎫 预订客票</button>
-  <button class="tab-btn" data-tab="tab-manage">📋 订单管理</button>
-  <button class="tab-btn" data-tab="tab-add">➕ 录入航班</button>
+<nav class="tab-nav" role="tablist" aria-label="主导航">
+  <button class="tab-btn active" data-tab="tab-overview" role="tab" aria-selected="true">📊 航班总览</button>
+  <button class="tab-btn" data-tab="tab-search" role="tab" aria-selected="false">🔍 搜索航班</button>
+  <button class="tab-btn" data-tab="tab-book" role="tab" aria-selected="false">🎫 预订客票</button>
+  <button class="tab-btn" data-tab="tab-manage" role="tab" aria-selected="false">📋 订单管理</button>
+  <button class="tab-btn" data-tab="tab-add" role="tab" aria-selected="false">➕ 录入航班</button>
 </nav>
 
 <!-- ==================== 主内容区 ==================== -->
@@ -55,6 +55,10 @@
           <label>出发日期 (可选)</label>
           <input type="date" id="quick-date">
         </div>
+        <div class="search-field search-field-sm">
+          <label>旅客人数</label>
+          <input type="number" id="quick-passengers" min="1" value="1" style="width:80px;">
+        </div>
         <button class="btn-search" id="btn-quick-search">🔍 搜索航班</button>
       </div>
       <datalist id="airport-list"></datalist>
@@ -76,14 +80,21 @@
         </table>
       </div>
     </div>
-    <button class="btn btn-outline btn-sm" id="btn-reset">🔄 恢复测试数据</button>
+    <div style="display:flex; gap:8px; margin-top:4px; flex-wrap:wrap;">
+      <button class="btn btn-outline btn-sm" id="btn-reset">🔄 恢复测试数据</button>
+      <button class="btn btn-outline btn-sm" id="btn-export">📥 导出数据</button>
+      <label class="btn btn-outline btn-sm" style="cursor:pointer;" aria-label="导入航班数据">
+        📤 导入数据
+        <input type="file" id="btn-import" accept=".json" style="display:none;" aria-hidden="true">
+      </label>
+    </div>
   </section>
 
   <!-- ===== ② 搜索航班 ===== -->
   <section class="tab-content" id="tab-search">
     <div class="hero-search">
       <h2>搜索可用航班</h2>
-      <p class="hero-sub">选择航线与日期，查看所有可用航班及票价</p>
+      <p class="hero-sub">选择航线与日期，使用高级筛选精准定位航班</p>
       <div class="search-row">
         <div class="search-field">
           <label>出发城市</label>
@@ -94,17 +105,90 @@
           <select id="search-dest"><option value="">全部终点站</option></select>
         </div>
         <div class="search-field">
+          <label>航班号 (可选)</label>
+          <input type="text" id="search-flightno" placeholder="如: CA1001" style="text-transform:uppercase;letter-spacing:1px;">
+        </div>
+        <div class="search-field">
           <label>出发日期 (可选)</label>
           <input type="date" id="search-date">
         </div>
+        <div class="search-field search-field-sm">
+          <label>旅客人数</label>
+          <input type="number" id="search-passengers" min="1" value="1" style="width:80px;">
+        </div>
         <button class="btn-search" id="btn-search">🔍 搜索</button>
       </div>
+      <!-- 高级筛选切换 -->
+      <button class="filter-toggle" id="btn-toggle-filters" type="button">
+        <span class="filter-toggle-icon">⚙</span> 高级筛选 <span class="filter-toggle-arrow">▾</span>
+      </button>
+      <!-- 高级筛选面板 -->
+      <div class="filter-panel" id="filter-panel" style="display:none;">
+        <div class="filter-grid">
+          <!-- 出发时段 -->
+          <div class="filter-group">
+            <label class="filter-label">🌅 出发时段</label>
+            <div class="chip-group" id="time-period-chips">
+              <button class="chip active" data-period="all">全部</button>
+              <button class="chip" data-period="morning">🌅 早班 6-12</button>
+              <button class="chip" data-period="afternoon">☀ 午班 12-18</button>
+              <button class="chip" data-period="evening">🌙 晚班 18-24</button>
+              <button class="chip" data-period="night">🌃 夜航 0-6</button>
+            </div>
+          </div>
+          <!-- 价格区间 -->
+          <div class="filter-group">
+            <label class="filter-label">💰 价格区间</label>
+            <div class="price-range-row">
+              <input type="number" id="filter-min-price" placeholder="最低价" min="0" step="100" style="width:110px;">
+              <span style="color:var(--text-light);">—</span>
+              <input type="number" id="filter-max-price" placeholder="最高价" min="0" step="100" style="width:110px;">
+              <select id="filter-price-cabin" style="width:100px;">
+                <option value="3">经济舱</option>
+                <option value="2">商务舱</option>
+                <option value="1">头等舱</option>
+              </select>
+              <button class="btn btn-outline btn-sm" id="btn-clear-price">清除</button>
+            </div>
+          </div>
+          <!-- 机型筛选 -->
+          <div class="filter-group">
+            <label class="filter-label">✈ 机型</label>
+            <div class="chip-group" id="aircraft-chips"></div>
+          </div>
+          <!-- 其他选项 -->
+          <div class="filter-group">
+            <label class="filter-label">📋 其他选项</label>
+            <div class="checkbox-row">
+              <label class="checkbox-label"><input type="checkbox" id="filter-include-full" checked> 包含满员航班</label>
+              <label class="checkbox-label"><input type="checkbox" id="filter-include-cancelled"> 包含已取消航班</label>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn btn-outline btn-sm" id="btn-reset-filters">🔄 重置筛选</button>
+          <span style="font-size:11px;color:var(--text-light);align-self:center;">筛选条件在搜索时自动应用</span>
+        </div>
+      </div>
+    </div>
+    <!-- 快捷标签 -->
+    <div class="quick-chips-bar" id="quick-chips-bar">
+      <span class="quick-chips-label">快捷:</span>
     </div>
     <div class="result-box" id="search-result"></div>
   </section>
 
   <!-- ===== ③ 预订客票 ===== -->
   <section class="tab-content" id="tab-book">
+    <!-- 步骤进度指示器 -->
+    <div class="step-progress" aria-label="订票进度">
+      <div class="step-item"><span class="step-dot active" id="step-dot-1">1</span></div>
+      <span class="step-line" id="step-line-1"></span>
+      <div class="step-item"><span class="step-dot" id="step-dot-2">2</span></div>
+      <span class="step-line" id="step-line-2"></span>
+      <div class="step-item"><span class="step-dot" id="step-dot-3">3</span></div>
+    </div>
+
     <!-- 步骤 1: 选航班 -->
     <div class="card" id="book-step1-card">
       <div class="card-header"><span class="icon">1️⃣</span>选择航班</div>
@@ -261,8 +345,62 @@
 
 </main>
 
+<!-- ==================== 候补登记模态框 ==================== -->
+<div class="modal-overlay" id="waitlist-modal" role="dialog" aria-labelledby="wl-modal-title" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span id="wl-modal-title">📝 加入候补队列</span>
+      <button class="modal-close" aria-label="关闭" onclick="closeWaitlistModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>航班</label>
+        <span id="wl-flight-info" style="font-weight:700;"></span>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group">
+          <label>旅客姓名</label>
+          <input type="text" id="wl-name" placeholder="请输入姓名" autocomplete="name">
+        </div>
+        <div class="form-group">
+          <label>所需票数</label>
+          <input type="number" id="wl-count" min="1" value="1">
+        </div>
+        <div class="form-group">
+          <label>舱位偏好</label>
+          <select id="wl-cabin">
+            <option value="1">头等舱</option>
+            <option value="2">商务舱</option>
+            <option value="3" selected>经济舱</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>联系方式</label>
+          <input type="text" id="wl-contact" placeholder="选填" autocomplete="tel">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeWaitlistModal()">取消</button>
+      <button class="btn btn-gold" id="btn-submit-waitlist">确认加入候补</button>
+    </div>
+  </div>
+</div>
+
 <!-- ==================== Toast ==================== -->
 <div class="toast-container" id="toast-container"></div>
+
+<!-- ==================== 返回顶部 ==================== -->
+<button class="back-to-top" id="back-to-top" aria-label="返回顶部" title="返回顶部">↑</button>
+
+<!-- ==================== 页脚 ==================== -->
+<footer class="app-footer">
+  <span class="footer-brand">✈ Air SkyLine</span>
+  <span class="footer-dot"></span>
+  Air SkyLine v2.3
+  <span class="footer-dot"></span>
+  版权所有 &copy; 2026 Air SkyLine. all rights reserved.
+</footer>
 
 <!-- ==================== 脚本 ==================== -->
 <script src="js/data-structures.js"></script>
